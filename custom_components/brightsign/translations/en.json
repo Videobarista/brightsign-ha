@@ -23,7 +23,7 @@
       },
       "reauth_confirm": {
         "title": "Re-enter the DWS password",
-        "description": "The BrightSign player at {host} rejected the stored DWS password.",
+        "description": "The BrightSign player at {host} rejected the stored DWS password, or its HTTPS certificate changed (firmware update or factory reset). Enter the password to continue; the current certificate is then trusted.",
         "data": {
           "password": "DWS password"
         }

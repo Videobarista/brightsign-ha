@@ -16,6 +16,7 @@ from homeassistant.components.sensor import (
 from homeassistant.const import EntityCategory, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.util import slugify
 
 from . import BrightSignConfigEntry
 from .api import find_key, info_value
@@ -128,7 +129,7 @@ class BrightSignUserVariableSensor(BrightSignEntity, SensorEntity):
     _attr_translation_key = "user_variable"
 
     def __init__(self, coordinator: BrightSignCoordinator, name: str) -> None:
-        super().__init__(coordinator, f"uservar_{name}")
+        super().__init__(coordinator, f"uservar_{slugify(name) or 'var'}")
         self._var = name
         self._attr_translation_placeholders = {"name": name}
 

@@ -11,6 +11,7 @@ CONF_MAC = "mac"
 CONF_SERIAL = "serial"
 CONF_REST_SCHEME = "rest_scheme"
 CONF_HAS_LWS = "has_lws"
+CONF_FINGERPRINT = "fingerprint"
 
 DEFAULT_PASSWORD = ""
 DWS_USERNAME = "admin"
@@ -25,6 +26,7 @@ DEFAULT_UDP_PORT = 5000
 # BrightSign synchronization (roSyncManager) multicast defaults
 SYNC_GROUP = "224.0.126.10"
 SYNC_PORT = 1539
+MAX_SYNC_DATAGRAM = 2048  # larger datagrams are ignored
 SYNC_TIMEOUT = 10  # seconds without sync traffic before the group counts as stopped
 SIGNAL_SYNC = "brightsign_sync_{}"
 

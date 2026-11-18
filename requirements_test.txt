@@ -1,1 +1,3 @@
-pytest-homeassistant-custom-component
+# Installs Home Assistant and the matching pytest plugins.
+# Pinned for reproducible runs; Dependabot keeps it up to date.
+pytest-homeassistant-custom-component==0.13.373

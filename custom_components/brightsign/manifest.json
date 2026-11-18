@@ -1,19 +1,29 @@
 {
   "domain": "brightsign",
   "name": "BrightSign",
-  "codeowners": ["@Videobarista"],
+  "codeowners": [
+    "@Videobarista"
+  ],
   "config_flow": true,
   "dhcp": [
-    { "macaddress": "90AC3F*" },
-    { "hostname": "brightsign-*" }
+    {
+      "macaddress": "90AC3F*"
+    },
+    {
+      "hostname": "brightsign-*"
+    }
   ],
   "documentation": "https://github.com/Videobarista/brightsign-ha",
   "integration_type": "device",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/Videobarista/brightsign-ha/issues",
   "requirements": [],
-  "version": "0.1.0",
+  "version": "0.2.0",
   "zeroconf": [
-    { "type": "_http._tcp.local.", "name": "brightsign*" }
-  ]
+    {
+      "type": "_http._tcp.local.",
+      "name": "brightsign*"
+    }
+  ],
+  "dependencies": []
 }

@@ -14,11 +14,18 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.typing import ConfigType
 
-from .api import BrightSignClient, BrightSignConnectionError, async_send_udp
+from .api import (
+    BrightSignClient,
+    BrightSignError,
+    async_send_udp,
+    is_local_address,
+    is_valid_udp_message,
+)
 from .const import (
     ATTR_HOST,
     ATTR_MESSAGE,
     ATTR_PORT,
+    CONF_FINGERPRINT,
     CONF_HAS_LWS,
     CONF_REST_SCHEME,
     DEFAULT_UDP_PORT,
@@ -37,11 +44,27 @@ PLATFORMS: list[Platform] = [
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
+
+def _local_ip(value: str) -> str:
+    """Only IP addresses on the local network (private, link-local, broadcast, multicast)."""
+    host = cv.string(value).strip()
+    if not is_local_address(host):
+        raise vol.Invalid("host must be a local IP address (no host names or public addresses)")
+    return host
+
+
+def _udp_message(value: str) -> str:
+    message = cv.string(value)
+    if not is_valid_udp_message(message):
+        raise vol.Invalid("message must be 1-1024 printable ASCII characters")
+    return message
+
+
 SEND_UDP_SCHEMA = vol.Schema(
     {
-        vol.Required(ATTR_HOST): cv.string,
+        vol.Required(ATTR_HOST): _local_ip,
         vol.Optional(ATTR_PORT, default=DEFAULT_UDP_PORT): cv.port,
-        vol.Required(ATTR_MESSAGE): vol.All(cv.string, vol.Length(min=1, max=1024)),
+        vol.Required(ATTR_MESSAGE): _udp_message,
     }
 )
 
@@ -66,7 +89,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             await async_send_udp(
                 call.data[ATTR_HOST], call.data[ATTR_PORT], call.data[ATTR_MESSAGE]
             )
-        except BrightSignConnectionError as err:
+        except BrightSignError as err:
             raise HomeAssistantError(str(err)) from err
 
     hass.services.async_register(DOMAIN, SERVICE_SEND_UDP, _send_udp, schema=SEND_UDP_SCHEMA)
@@ -80,6 +103,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: BrightSignConfigEntry) -
         entry.data[CONF_HOST],
         entry.data.get(CONF_PASSWORD, ""),
         entry.data.get(CONF_REST_SCHEME),
+        entry.data.get(CONF_FINGERPRINT),
     )
     coordinator = BrightSignCoordinator(
         hass,

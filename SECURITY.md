@@ -4,17 +4,36 @@
 
 Only the latest release of this integration receives fixes.
 
+| Version | Supported |
+| ------- | --------- |
+| 0.2.x   | Yes       |
+| < 0.2   | No        |
+
 ## Reporting a vulnerability
 
-Please report security issues privately via
-[GitHub security advisories](https://github.com/Videobarista/brightsign-ha/security/advisories/new)
-instead of opening a public issue.
+Please do **not** open a public issue for security problems.
 
-## Design notes
+Use GitHub's private vulnerability reporting instead:
+**Security** tab → **Report a vulnerability** on
+<https://github.com/Videobarista/brightsign-ha>.
 
-- Local network only: no cloud services are contacted.
-- Only documented local interfaces are used (DWS REST API, presentation Local Web Server XML,
-  UDP commands, passive sync multicast listening). No web interface pages are scraped.
-- The local DWS uses a self-signed certificate, so TLS certificate verification is disabled
-  for requests to the configured player only.
-- Sync multicast traffic is only received, never sent.
+Include what you found, how to reproduce it and which version you use. You
+can expect a first reply within a week.
+
+## Scope
+
+This integration talks to BrightSign players on your local network. Keep in mind:
+
+- A player's Local Web Server (port 8080) and UDP receiver have no
+  authentication: anyone on the same network can trigger presentation events.
+  Keep players in a separate network segment.
+- The DWS password is stored in the Home Assistant config entry (like every
+  integration) and is redacted from diagnostics, as are host, serial number,
+  MAC address, certificate fingerprint, player names and user variables.
+  Protect your Home Assistant host and backups accordingly.
+- With HTTPS the player's self-signed certificate is pinned at setup. Confirm a
+  changed certificate only when you know why it changed (firmware update,
+  factory reset).
+
+The README has a [Security section](README.md#security) with what the
+integration does and recommended network settings.

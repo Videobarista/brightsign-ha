@@ -3,8 +3,12 @@
 A sync leader multicasts small JSON messages to 224.0.126.10:1539, e.g.
 ``{"d": "1", "p": "1\\n1\\n20261118T155417.834393", "v": 1}`` (current sync item and the
 player time it started) and ``{"d": "vsync:1", ...}`` (heartbeat). Messages are only
-read; nothing is ever sent to the group. Encrypted sync traffic is counted as
+received; nothing is ever sent to the group. Encrypted sync traffic is counted as
 activity but not decoded.
+
+Hardening: datagrams above 2 KiB and datagrams from non-local addresses are ignored,
+text is bounded, and entity states are only written when something changes (the
+heartbeat arrives every second).
 """
 
 from __future__ import annotations
@@ -22,25 +26,32 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, SIGNAL_SYNC, SYNC_GROUP, SYNC_PORT, SYNC_TIMEOUT
+from .api import is_local_address, sanitize_text
+from .const import DOMAIN, MAX_SYNC_DATAGRAM, SIGNAL_SYNC, SYNC_GROUP, SYNC_PORT, SYNC_TIMEOUT
 
 _LOGGER = logging.getLogger(__name__)
 _SHARED_KEY = f"{DOMAIN}_sync_listener"
 
 
+def decode_sync_message(data: bytes) -> dict | None:
+    """Decode one sync datagram; None for encrypted or non-JSON traffic."""
+    try:
+        decoded = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
 class _SyncProtocol(asyncio.DatagramProtocol):
+    """Receive-only protocol for the sync multicast group."""
+
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        message: dict | None = None
-        try:
-            decoded = json.loads(data.decode("utf-8"))
-            if isinstance(decoded, dict):
-                message = decoded
-        except (UnicodeDecodeError, ValueError):
-            message = None  # encrypted or non-JSON sync traffic: activity only
-        async_dispatcher_send(self._hass, SIGNAL_SYNC.format(addr[0]), message)
+        if len(data) > MAX_SYNC_DATAGRAM or not is_local_address(addr[0]):
+            return
+        async_dispatcher_send(self._hass, SIGNAL_SYNC.format(addr[0]), decode_sync_message(data))
 
 
 class SyncListener:
@@ -48,10 +59,11 @@ class SyncListener:
 
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
-        self._transport: asyncio.DatagramTransport | None = None
+        self._transport: asyncio.BaseTransport | None = None
         self._users = 0
 
     async def async_start(self) -> None:
+        """Join the sync multicast group (once, shared by all entries)."""
         self._users += 1
         if self._transport is not None:
             return
@@ -61,7 +73,7 @@ class SyncListener:
             if hasattr(socket, "SO_REUSEPORT"):
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
             sock.bind(("", SYNC_PORT))
-            mreq = struct.pack("=4s4s", socket.inet_aton(SYNC_GROUP), socket.inet_aton("0.0.0.0"))
+            mreq = struct.pack("=4sl", socket.inet_aton(SYNC_GROUP), socket.INADDR_ANY)
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
             sock.setblocking(False)
         except OSError as err:
@@ -75,6 +87,7 @@ class SyncListener:
 
     @callback
     def async_stop(self) -> None:
+        """Leave the group when the last entry unloads."""
         self._users = max(0, self._users - 1)
         if self._users == 0 and self._transport is not None:
             self._transport.close()
@@ -91,12 +104,13 @@ async def async_acquire_listener(hass: HomeAssistant) -> SyncListener:
     return listener
 
 
-def _player_time(payload: str) -> datetime | None:
+def player_time(payload: str) -> datetime | None:
     """Parse the player timestamp at the end of the 'p' field."""
-    last = payload.strip().splitlines()[-1] if payload.strip() else ""
+    lines = payload.strip().splitlines()
+    last = lines[-1][:32] if lines else ""
     for fmt in ("%Y%m%dT%H%M%S.%f", "%Y%m%dT%H%M%S"):
         try:
-            return datetime.strptime(last, fmt)
+            return datetime.strptime(last, fmt)  # noqa: DTZ007 - player-local, only diffs used
         except ValueError:
             continue
     return None
@@ -120,12 +134,14 @@ class SyncTracker:
 
     @callback
     def async_start(self) -> None:
+        """Listen for sync traffic from this player's address."""
         self._unsub = async_dispatcher_connect(
-            self._hass, SIGNAL_SYNC.format(self._host), self._handle
+            self._hass, SIGNAL_SYNC.format(self._host), self.async_handle
         )
 
     @callback
     def async_stop(self) -> None:
+        """Stop listening."""
         if self._unsub is not None:
             self._unsub()
             self._unsub = None
@@ -135,13 +151,9 @@ class SyncTracker:
         """True while this player sent sync traffic recently."""
         return self._last_seen is not None and time.monotonic() - self._last_seen < SYNC_TIMEOUT
 
-    @property
-    def seen(self) -> bool:
-        """True once any sync traffic from this player was received."""
-        return self._last_seen is not None
-
     @callback
     def async_add_listener(self, update: Callable[[], None]) -> CALLBACK_TYPE:
+        """Register an entity update callback."""
         self._listeners.append(update)
 
         @callback
@@ -151,27 +163,36 @@ class SyncTracker:
 
         return remove
 
+    def _snapshot(self) -> tuple:
+        return (self.item, self.item_started, self.last_item_duration, self.encrypted)
+
     @callback
-    def _handle(self, message: dict | None) -> None:
+    def async_handle(self, message: dict | None) -> None:
+        """Process one decoded datagram from this player."""
+        was_active = self.active
+        before = self._snapshot()
         self._last_seen = time.monotonic()
         if message is None:
             self.encrypted = True
         else:
-            item = str(message.get("d", ""))
+            item = sanitize_text(message.get("d", ""))
             if item and not item.startswith("vsync"):
-                payload = str(message.get("p", ""))
-                stamp = payload.strip().splitlines()[-1] if payload.strip() else ""
-                key = (item, stamp)
+                payload = str(message.get("p", ""))[:256]
+                lines = payload.strip().splitlines()
+                key = (item, lines[-1][:32] if lines else "")
                 if key != self._last_key:
-                    player_time = _player_time(payload)
+                    stamp = player_time(payload)
                     if self._last_key is not None:
                         self.item_started = dt_util.utcnow()
-                        if player_time and self._last_player_time:
-                            self.last_item_duration = round(
-                                (player_time - self._last_player_time).total_seconds(), 1
+                        if stamp and self._last_player_time:
+                            duration = (stamp - self._last_player_time).total_seconds()
+                            self.last_item_duration = (
+                                round(duration, 1) if 0 <= duration < 7 * 86400 else None
                             )
                     self._last_key = key
-                    self._last_player_time = player_time
+                    self._last_player_time = stamp
                     self.item = item
+        if was_active and self._snapshot() == before:
+            return  # heartbeat only: nothing to write
         for update in list(self._listeners):
             update()

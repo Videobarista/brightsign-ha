@@ -2,7 +2,7 @@ send_udp:
   fields:
     host:
       required: true
-      example: "10.99.99.122"
+      example: "192.168.1.50"
       selector:
         text:
     port:

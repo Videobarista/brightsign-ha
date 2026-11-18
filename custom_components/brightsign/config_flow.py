@@ -14,9 +14,11 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
+from homeassistant.util.ssl import get_default_no_verify_context
 
 from .api import BrightSignClient, ProbeResult
 from .const import (
+    CONF_FINGERPRINT,
     CONF_HAS_LWS,
     CONF_MAC,
     CONF_REST_SCHEME,
@@ -43,7 +45,10 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def _async_probe(self, host: str, password: str) -> ProbeResult:
         client = BrightSignClient(
-            async_get_clientsession(self.hass, verify_ssl=False), host, password
+            async_get_clientsession(self.hass, verify_ssl=False),
+            host,
+            password,
+            no_verify_context=get_default_no_verify_context(),
         )
         return await client.async_probe()
 
@@ -53,6 +58,7 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_PASSWORD: password,
             CONF_REST_SCHEME: result.rest_scheme,
             CONF_HAS_LWS: result.lws,
+            CONF_FINGERPRINT: result.fingerprint,
             CONF_SERIAL: result.serial or self._serial,
             CONF_MAC: self._mac,
         }
@@ -161,7 +167,7 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
     # ----- reauth ----------------------------------------------------------
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
-        """The stored DWS password was rejected."""
+        """The stored DWS password was rejected or the HTTPS certificate changed."""
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
@@ -180,6 +186,7 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_PASSWORD: password,
                         CONF_REST_SCHEME: result.rest_scheme,
                         CONF_HAS_LWS: result.lws,
+                        CONF_FINGERPRINT: result.fingerprint,
                     },
                 )
         return self.async_show_form(

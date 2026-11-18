@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .api import (
     BrightSignAuthError,
+    BrightSignCertificateError,
     BrightSignClient,
     BrightSignConnectionError,
     BrightSignNotSupported,
@@ -72,6 +73,10 @@ class BrightSignCoordinator(DataUpdateCoordinator[BrightSignData]):
                     data.power_save = await self.client.async_get_power_save()
                 except BrightSignNotSupported:
                     data.power_save = None
+            except BrightSignCertificateError as err:
+                raise ConfigEntryAuthFailed(
+                    f"BrightSign {self.client.host}: HTTPS certificate changed"
+                ) from err
             except BrightSignAuthError as err:
                 raise ConfigEntryAuthFailed(
                     f"BrightSign {self.client.host} rejected the DWS password"
