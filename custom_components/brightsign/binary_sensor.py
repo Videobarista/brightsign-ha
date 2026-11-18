@@ -65,6 +65,8 @@ class HdmiConnectedBinarySensor(BrightSignEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool | None:
+        if not self.player_online:
+            return False
         value = find_key(self.coordinator.data.video, "attached")
         return value if isinstance(value, bool) else None
 

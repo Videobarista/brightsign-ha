@@ -10,6 +10,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.brightsign.api import ProbeResult
 from custom_components.brightsign.const import (
+    CONF_FINGERPRINT,
     CONF_HAS_LWS,
     CONF_MAC,
     CONF_REST_SCHEME,
@@ -26,12 +27,28 @@ from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 PROBE = "custom_components.brightsign.config_flow.BrightSignClient.async_probe"
 SETUP = "custom_components.brightsign.async_setup_entry"
 
-REST_OK = ProbeResult(
-    reachable=True, rest_scheme="https", serial="XAE3TEST0001", model="HD224", name="Lobby"
-)
-LEGACY = ProbeResult(reachable=True)
-AUTH_FAILED = ProbeResult(reachable=True, rest_scheme="https", auth_failed=True)
-OFFLINE = ProbeResult(reachable=False)
+
+def REST_OK() -> ProbeResult:
+    return ProbeResult(
+        reachable=True,
+        rest_scheme="https",
+        serial="XAE3TEST0001",
+        model="HD224",
+        name="Lobby",
+        fingerprint="ab" * 32,
+    )
+
+
+def LEGACY() -> ProbeResult:
+    return ProbeResult(reachable=True)
+
+
+def AUTH_FAILED() -> ProbeResult:
+    return ProbeResult(reachable=True, rest_scheme="https", auth_failed=True)
+
+
+def OFFLINE() -> ProbeResult:
+    return ProbeResult(reachable=False)
 
 
 @pytest.fixture(autouse=True)
@@ -45,7 +62,7 @@ async def test_user_rest_player(hass: HomeAssistant) -> None:
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
     assert result["type"] is FlowResultType.FORM
-    with patch(PROBE, AsyncMock(return_value=REST_OK)):
+    with patch(PROBE, AsyncMock(return_value=REST_OK())):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {CONF_HOST: "10.0.0.5", CONF_PASSWORD: "secret"}
         )
@@ -60,7 +77,7 @@ async def test_user_legacy_player_uses_host_as_id(hass: HomeAssistant) -> None:
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
-    with patch(PROBE, AsyncMock(return_value=LEGACY)):
+    with patch(PROBE, AsyncMock(return_value=LEGACY())):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {CONF_HOST: "10.0.0.6", CONF_PASSWORD: ""}
         )
@@ -75,17 +92,17 @@ async def test_user_errors_then_recover(hass: HomeAssistant) -> None:
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
-    with patch(PROBE, AsyncMock(return_value=OFFLINE)):
+    with patch(PROBE, AsyncMock(return_value=OFFLINE())):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {CONF_HOST: "10.0.0.7", CONF_PASSWORD: ""}
         )
     assert result["errors"] == {"base": "cannot_connect"}
-    with patch(PROBE, AsyncMock(return_value=AUTH_FAILED)):
+    with patch(PROBE, AsyncMock(return_value=AUTH_FAILED())):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {CONF_HOST: "10.0.0.7", CONF_PASSWORD: "wrong"}
         )
     assert result["errors"] == {CONF_PASSWORD: "invalid_auth"}
-    with patch(PROBE, AsyncMock(return_value=REST_OK)):
+    with patch(PROBE, AsyncMock(return_value=REST_OK())):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {CONF_HOST: "10.0.0.7", CONF_PASSWORD: "right"}
         )
@@ -99,7 +116,7 @@ async def test_user_already_configured(hass: HomeAssistant) -> None:
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
-    with patch(PROBE, AsyncMock(return_value=REST_OK)):
+    with patch(PROBE, AsyncMock(return_value=REST_OK())):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {CONF_HOST: "10.0.0.5", CONF_PASSWORD: ""}
         )
@@ -114,7 +131,7 @@ async def test_dhcp_discovery(hass: HomeAssistant) -> None:
     )
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "discovery_confirm"
-    with patch(PROBE, AsyncMock(return_value=LEGACY)):
+    with patch(PROBE, AsyncMock(return_value=LEGACY())):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {CONF_PASSWORD: ""}
         )
@@ -143,12 +160,12 @@ async def test_dhcp_discovery_auth_error(hass: HomeAssistant) -> None:
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_DHCP}, data=info
     )
-    with patch(PROBE, AsyncMock(return_value=AUTH_FAILED)):
+    with patch(PROBE, AsyncMock(return_value=AUTH_FAILED())):
         result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {CONF_PASSWORD: ""}
+            result["flow_id"], {CONF_PASSWORD: "wrong"}
         )
     assert result["errors"] == {CONF_PASSWORD: "invalid_auth"}
-    with patch(PROBE, AsyncMock(return_value=REST_OK)):
+    with patch(PROBE, AsyncMock(return_value=REST_OK())):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {CONF_PASSWORD: "serial"}
         )
@@ -188,15 +205,54 @@ async def test_reauth(hass: HomeAssistant) -> None:
     entry.add_to_hass(hass)
     result = await entry.start_reauth_flow(hass)
     assert result["step_id"] == "reauth_confirm"
-    with patch(PROBE, AsyncMock(return_value=AUTH_FAILED)):
+    with patch(PROBE, AsyncMock(return_value=AUTH_FAILED())):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {CONF_PASSWORD: "x"}
         )
     assert result["errors"] == {CONF_PASSWORD: "invalid_auth"}
-    with patch(PROBE, AsyncMock(return_value=REST_OK)):
+    with patch(PROBE, AsyncMock(return_value=REST_OK())):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {CONF_PASSWORD: "new"}
         )
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reauth_successful"
     assert entry.data[CONF_PASSWORD] == "new"
+
+
+async def test_user_without_password_adds_basic_player(hass: HomeAssistant) -> None:
+    """A protected player without a password is added without the REST API."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    with patch(PROBE, AsyncMock(return_value=AUTH_FAILED())):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_HOST: "10.0.0.50", CONF_PASSWORD: ""}
+        )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_REST_SCHEME] is None
+    assert result["data"][CONF_FINGERPRINT] is None
+
+
+async def test_reconfigure_adds_password(hass: HomeAssistant) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="10.0.0.50",
+        data={CONF_HOST: "10.0.0.50", CONF_PASSWORD: "", CONF_REST_SCHEME: None},
+    )
+    entry.add_to_hass(hass)
+    result = await entry.start_reconfigure_flow(hass)
+    assert result["step_id"] == "reconfigure"
+    with patch(PROBE, AsyncMock(return_value=AUTH_FAILED())):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_HOST: "10.0.0.50", CONF_PASSWORD: "wrong"}
+        )
+    assert result["errors"] == {CONF_PASSWORD: "invalid_auth"}
+    with patch(PROBE, AsyncMock(return_value=REST_OK())):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_HOST: "10.0.0.51", CONF_PASSWORD: "serial"}
+        )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.data[CONF_HOST] == "10.0.0.51"
+    assert entry.data[CONF_REST_SCHEME] == "https"
+    assert entry.data[CONF_FINGERPRINT] == "ab" * 32

@@ -77,6 +77,8 @@ class BrightSignButton(BrightSignEntity, ButtonEntity):
         self.entity_description = description
 
     async def async_press(self) -> None:
+        if not self.player_online:
+            raise HomeAssistantError(f"BrightSign {self.coordinator.client.host} is offline")
         try:
             await self.entity_description.press_fn(self.coordinator.client)
         except BrightSignError as err:

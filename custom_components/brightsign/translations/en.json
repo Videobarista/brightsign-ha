@@ -4,63 +4,109 @@
     "step": {
       "user": {
         "title": "Add a BrightSign player",
-        "description": "Enter the player's IP address. The password is the local Diagnostic Web Server (DWS) password (user is always \"admin\"; factory default is the serial number). Leave it empty if the player has no password or no DWS.",
+        "description": "Enter the player's IP address. The DWS password is optional.",
         "data": {
           "host": "Host",
-          "password": "DWS password"
+          "password": "DWS password (optional)"
         },
         "data_description": {
           "host": "IP address or hostname of the BrightSign player.",
-          "password": "Local DWS password. Needed for model, uptime, HDMI status, reboot and CEC control on players with the DWS REST API."
+          "password": "Optional. Leave empty if the player has no password or you don't know it: the player is then added with basic entities (online, sync) and you can add the password later with Reconfigure. The user is always \"admin\"; the factory default password is the player's serial number."
         }
       },
       "discovery_confirm": {
         "title": "BrightSign player found",
-        "description": "A BrightSign player was found at {host}. Enter its local DWS password if it has one.",
+        "description": "A BrightSign player was found at {host}. The DWS password is optional: leave it empty to add the player with basic entities.",
         "data": {
-          "password": "DWS password"
+          "password": "DWS password (optional)"
+        },
+        "data_description": {
+          "password": "Optional. Leave empty if the player has no password or you don't know it: the player is then added with basic entities (online, sync) and you can add the password later with Reconfigure."
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure BrightSign player",
+        "description": "Change the address, or add or change the DWS password to unlock model, uptime, HDMI status, reboot and CEC control.",
+        "data": {
+          "host": "Host",
+          "password": "DWS password (optional)"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the BrightSign player.",
+          "password": "Leave empty to use the player without the DWS REST API."
         }
       },
       "reauth_confirm": {
         "title": "Re-enter the DWS password",
-        "description": "The BrightSign player at {host} rejected the stored DWS password, or its HTTPS certificate changed (firmware update or factory reset). Enter the password to continue; the current certificate is then trusted.",
+        "description": "The BrightSign player at {host} rejected the stored DWS password, or its HTTPS certificate changed (firmware update or factory reset). Enter the password to continue; the current certificate is then trusted. Leave it empty to continue with basic entities only.",
         "data": {
-          "password": "DWS password"
+          "password": "DWS password (optional)"
         }
       }
     },
     "error": {
       "cannot_connect": "Could not reach the player. Check the IP address and that the player is on.",
-      "invalid_auth": "The player rejected this DWS password."
+      "invalid_auth": "The player rejected this DWS password. Correct it, or leave the field empty to add the player with basic entities."
     },
     "abort": {
       "already_configured": "This player is already configured.",
-      "reauth_successful": "The password was updated."
+      "reauth_successful": "The password was updated.",
+      "reconfigure_successful": "The player was reconfigured."
     }
   },
   "entity": {
     "binary_sensor": {
-      "online": { "name": "Online" },
-      "hdmi_connected": { "name": "HDMI display connected" },
-      "sync_active": { "name": "Sync group running" }
+      "online": {
+        "name": "Online"
+      },
+      "hdmi_connected": {
+        "name": "HDMI display connected"
+      },
+      "sync_active": {
+        "name": "Sync group running"
+      }
     },
     "button": {
-      "cec_display_on": { "name": "Display on (CEC)" },
-      "cec_display_standby": { "name": "Display standby (CEC)" },
-      "udp_event": { "name": "UDP {name}" }
+      "cec_display_on": {
+        "name": "Display on (CEC)"
+      },
+      "cec_display_standby": {
+        "name": "Display standby (CEC)"
+      },
+      "udp_event": {
+        "name": "UDP {name}"
+      }
     },
     "sensor": {
-      "os_version": { "name": "OS version" },
-      "uptime": { "name": "Uptime" },
-      "video_mode": { "name": "Video mode" },
-      "autorun_version": { "name": "Autorun version" },
-      "user_variable": { "name": "Variable {name}" },
-      "sync_item": { "name": "Sync item" },
-      "sync_item_started": { "name": "Sync item started" },
-      "sync_item_duration": { "name": "Last sync item duration" }
+      "os_version": {
+        "name": "OS version"
+      },
+      "uptime": {
+        "name": "Uptime"
+      },
+      "video_mode": {
+        "name": "Video mode"
+      },
+      "autorun_version": {
+        "name": "Autorun version"
+      },
+      "user_variable": {
+        "name": "Variable {name}"
+      },
+      "sync_item": {
+        "name": "Sync item"
+      },
+      "sync_item_started": {
+        "name": "Sync item started"
+      },
+      "sync_item_duration": {
+        "name": "Last sync item duration"
+      }
     },
     "switch": {
-      "hdmi_output": { "name": "HDMI output" }
+      "hdmi_output": {
+        "name": "HDMI output"
+      }
     }
   },
   "services": {

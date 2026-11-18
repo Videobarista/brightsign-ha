@@ -38,10 +38,14 @@ class HdmiOutputSwitch(BrightSignEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool | None:
+        if not self.player_online:
+            return False
         power_save = self.coordinator.data.power_save
         return None if power_save is None else not power_save
 
     async def _set(self, on: bool) -> None:
+        if not self.player_online:
+            raise HomeAssistantError(f"BrightSign {self.coordinator.client.host} is offline")
         try:
             await self.coordinator.client.async_set_hdmi_output(on)
         except BrightSignError as err:

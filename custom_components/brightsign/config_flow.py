@@ -76,8 +76,13 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
             errors["base"] = "cannot_connect"
             return None
         if result.auth_failed:
-            errors[CONF_PASSWORD] = "invalid_auth"
-            return None
+            if password:
+                errors[CONF_PASSWORD] = "invalid_auth"
+                return None
+            # No password given: add the player without the DWS REST API (basic entities).
+            # The password can be added later with Reconfigure.
+            result.rest_scheme = None
+            result.fingerprint = None
         return result
 
     # ----- manual ----------------------------------------------------------
@@ -161,6 +166,44 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="discovery_confirm",
             data_schema=PASSWORD_SCHEMA,
             description_placeholders={"host": host},
+            errors=errors,
+        )
+
+    # ----- reconfigure -----------------------------------------------------
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Change the address or add/change the DWS password of a configured player."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            host = user_input[CONF_HOST].strip()
+            password = user_input.get(CONF_PASSWORD, DEFAULT_PASSWORD)
+            result = await self._async_validate(host, password, errors)
+            if result is not None:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates={
+                        CONF_HOST: host,
+                        CONF_PASSWORD: password,
+                        CONF_REST_SCHEME: result.rest_scheme,
+                        CONF_HAS_LWS: result.lws,
+                        CONF_FINGERPRINT: result.fingerprint,
+                        CONF_SERIAL: result.serial or entry.data.get(CONF_SERIAL),
+                    },
+                )
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema(
+                    {
+                        vol.Required(CONF_HOST): str,
+                        vol.Optional(CONF_PASSWORD, default=DEFAULT_PASSWORD): str,
+                    }
+                ),
+                user_input or {CONF_HOST: entry.data[CONF_HOST]},
+            ),
             errors=errors,
         )
 

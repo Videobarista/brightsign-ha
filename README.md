@@ -43,9 +43,11 @@ Players are discovered automatically by their BrightSign MAC address (`90:AC:3F`
 (`brightsign-<serial>`) or the mDNS advertisement of a BrightAuthor presentation. You can also add
 a player manually by IP address.
 
-The **DWS password** belongs to the local Diagnostic Web Server (user is always `admin`). The
-factory default is the player's serial number; leave the field empty if the player has none. If
-the password changes later, Home Assistant asks for the new one (re-authentication).
+The **DWS password** (local Diagnostic Web Server, user always `admin`) is **optional**. The
+factory default is the player's serial number. Without it — or when the player has no DWS — the
+player is still added with the basic entities (online, sync, UDP). Add or change the password
+later with **Settings → Devices & services → BrightSign → ⋮ → Reconfigure**. If a stored password
+stops working, Home Assistant asks for the new one (re-authentication).
 
 ## Installation
 
@@ -69,6 +71,9 @@ Sends a UDP message, e.g. to trigger a UDP input event of a BrightAuthor present
 
 ## Notes
 
+- A switched-off player is normal: its entities stay available and show it as offline (online
+  off, HDMI off, other values unknown) instead of turning unavailable. Commands to an offline
+  player are refused with a clear message.
 - Sync entities only fill on the player that is the sync **leader**; followers do not send sync
   traffic. Encrypted sync traffic (BrightSignOS 8+ default) counts as activity but the item cannot
   be read.

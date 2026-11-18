@@ -36,7 +36,11 @@ def build_device_info(coordinator: BrightSignCoordinator) -> DeviceInfo:
 
 
 class BrightSignEntity(CoordinatorEntity[BrightSignCoordinator]):
-    """Entity backed by the poll coordinator; unavailable while the player is offline."""
+    """Entity backed by the poll coordinator.
+
+    A switched-off player is normal in AV installations: entities stay available and show
+    the player as offline (off / unknown) instead of turning unavailable.
+    """
 
     _attr_has_entity_name = True
 
@@ -48,8 +52,13 @@ class BrightSignEntity(CoordinatorEntity[BrightSignCoordinator]):
 
     @property
     def available(self) -> bool:
+        return super().available and self.coordinator.data is not None
+
+    @property
+    def player_online(self) -> bool:
+        """True while the player answers on the network."""
         data = self.coordinator.data
-        return super().available and data is not None and data.online
+        return data is not None and data.online
 
 
 class BrightSignSyncEntity(Entity):

@@ -1,0 +1,132 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "BrightSign-speler toevoegen",
+        "description": "Vul het IP-adres van de speler in. Het DWS-wachtwoord is optioneel.",
+        "data": {
+          "host": "Host",
+          "password": "DWS-wachtwoord (optioneel)"
+        },
+        "data_description": {
+          "host": "IP-adres of hostnaam van de BrightSign-speler.",
+          "password": "Optioneel. Laat leeg als de speler geen wachtwoord heeft of je het niet weet: de speler wordt dan toegevoegd met de basis-entiteiten (online, sync) en je kunt het wachtwoord later toevoegen via Opnieuw configureren. De gebruiker is altijd \"admin\"; het fabriekswachtwoord is het serienummer van de speler."
+        }
+      },
+      "discovery_confirm": {
+        "title": "BrightSign-speler gevonden",
+        "description": "Er is een BrightSign-speler gevonden op {host}. Het DWS-wachtwoord is optioneel: laat het leeg om de speler toe te voegen met de basis-entiteiten.",
+        "data": {
+          "password": "DWS-wachtwoord (optioneel)"
+        },
+        "data_description": {
+          "password": "Optioneel. Laat leeg als de speler geen wachtwoord heeft of je het niet weet: de speler wordt dan toegevoegd met de basis-entiteiten (online, sync) en je kunt het wachtwoord later toevoegen via Opnieuw configureren."
+        }
+      },
+      "reconfigure": {
+        "title": "BrightSign-speler opnieuw configureren",
+        "description": "Wijzig het adres, of voeg het DWS-wachtwoord toe of wijzig het voor model, uptime, HDMI-status, herstarten en CEC-bediening.",
+        "data": {
+          "host": "Host",
+          "password": "DWS-wachtwoord (optioneel)"
+        },
+        "data_description": {
+          "host": "IP-adres of hostnaam van de BrightSign-speler.",
+          "password": "Laat leeg om de speler zonder de DWS REST API te gebruiken."
+        }
+      },
+      "reauth_confirm": {
+        "title": "DWS-wachtwoord opnieuw invoeren",
+        "description": "De BrightSign-speler op {host} weigerde het opgeslagen DWS-wachtwoord, of het HTTPS-certificaat is veranderd (firmware-update of fabrieksreset). Vul het wachtwoord in om verder te gaan; het huidige certificaat wordt dan vertrouwd. Laat leeg om alleen met de basis-entiteiten verder te gaan.",
+        "data": {
+          "password": "DWS-wachtwoord (optioneel)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Kan de speler niet bereiken. Controleer het IP-adres en of de speler aan staat.",
+      "invalid_auth": "De speler weigerde dit DWS-wachtwoord. Verbeter het, of laat het veld leeg om de speler met de basis-entiteiten toe te voegen."
+    },
+    "abort": {
+      "already_configured": "Deze speler is al geconfigureerd.",
+      "reauth_successful": "Het wachtwoord is bijgewerkt.",
+      "reconfigure_successful": "De speler is opnieuw geconfigureerd."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "online": {
+        "name": "Online"
+      },
+      "hdmi_connected": {
+        "name": "HDMI-scherm aangesloten"
+      },
+      "sync_active": {
+        "name": "Sync-groep actief"
+      }
+    },
+    "button": {
+      "cec_display_on": {
+        "name": "Scherm aan (CEC)"
+      },
+      "cec_display_standby": {
+        "name": "Scherm stand-by (CEC)"
+      },
+      "udp_event": {
+        "name": "UDP {name}"
+      }
+    },
+    "sensor": {
+      "os_version": {
+        "name": "OS-versie"
+      },
+      "uptime": {
+        "name": "Uptime"
+      },
+      "video_mode": {
+        "name": "Videomodus"
+      },
+      "autorun_version": {
+        "name": "Autorun-versie"
+      },
+      "user_variable": {
+        "name": "Variabele {name}"
+      },
+      "sync_item": {
+        "name": "Sync-item"
+      },
+      "sync_item_started": {
+        "name": "Sync-item gestart"
+      },
+      "sync_item_duration": {
+        "name": "Duur laatste sync-item"
+      }
+    },
+    "switch": {
+      "hdmi_output": {
+        "name": "HDMI-uitgang"
+      }
+    }
+  },
+  "services": {
+    "send_udp": {
+      "name": "UDP-commando versturen",
+      "description": "Verstuurt een UDP-bericht, bijvoorbeeld om een UDP-input in een BrightAuthor-presentatie te activeren.",
+      "fields": {
+        "host": {
+          "name": "Host",
+          "description": "IP-adres van de speler, of een broadcastadres zoals 255.255.255.255 (alleen lokale adressen)."
+        },
+        "port": {
+          "name": "Poort",
+          "description": "UDP-ontvangstpoort van de presentatie (standaard 5000)."
+        },
+        "message": {
+          "name": "Bericht",
+          "description": "De UDP-commandotekst zoals gedefinieerd in de presentatie."
+        }
+      }
+    }
+  }
+}

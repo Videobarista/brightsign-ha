@@ -451,16 +451,19 @@ class BrightSignClient:
     # ----- Reachability / probe ----------------------------------------------
 
     async def async_reachable(self) -> bool:
-        """True when any of the player's TCP service ports answers."""
-        for port in (80, 443, LWS_PORT):
+        """True when any of the player's TCP service ports answers (checked in parallel)."""
+
+        async def _check(port: int) -> bool:
             try:
-                async with asyncio.timeout(3):
+                async with asyncio.timeout(2):
                     _reader, writer = await asyncio.open_connection(self.host, port)
             except (OSError, TimeoutError):
-                continue
+                return False
             writer.close()
             return True
-        return False
+
+        results = await asyncio.gather(*(_check(port) for port in (80, 443, LWS_PORT)))
+        return any(results)
 
     async def async_probe(self) -> ProbeResult:
         """Detect which local interfaces the player offers (first contact, no pin yet)."""
