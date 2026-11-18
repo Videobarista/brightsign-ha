@@ -11,7 +11,7 @@
         },
         "data_description": {
           "host": "IP-adres of hostnaam van de BrightSign-speler.",
-          "password": "Optioneel. Laat leeg als de speler geen wachtwoord heeft of je het niet weet: de speler wordt dan toegevoegd met de basis-entiteiten (online, sync) en je kunt het wachtwoord later toevoegen via Opnieuw configureren. De gebruiker is altijd \"admin\"; het fabriekswachtwoord is het serienummer van de speler."
+          "password": "Optioneel. Laat leeg als de speler geen wachtwoord heeft of je het niet weet: de speler wordt dan toegevoegd met de basis-entiteiten (online, sync) en je kunt het wachtwoord later toevoegen via Opnieuw configureren. De gebruiker is altijd \"admin\"; het fabriekswachtwoord is het serienummer van de speler. Leeg gelaten probeert de integratie eerst automatisch het serienummer van de speler (het fabriekswachtwoord)."
         }
       },
       "discovery_confirm": {
@@ -21,7 +21,7 @@
           "password": "DWS-wachtwoord (optioneel)"
         },
         "data_description": {
-          "password": "Optioneel. Laat leeg als de speler geen wachtwoord heeft of je het niet weet: de speler wordt dan toegevoegd met de basis-entiteiten (online, sync) en je kunt het wachtwoord later toevoegen via Opnieuw configureren."
+          "password": "Optioneel. Laat leeg als de speler geen wachtwoord heeft of je het niet weet: de speler wordt dan toegevoegd met de basis-entiteiten (online, sync) en je kunt het wachtwoord later toevoegen via Opnieuw configureren. Leeg gelaten probeert de integratie eerst automatisch het serienummer van de speler (het fabriekswachtwoord)."
         }
       },
       "reconfigure": {
@@ -33,7 +33,7 @@
         },
         "data_description": {
           "host": "IP-adres of hostnaam van de BrightSign-speler.",
-          "password": "Laat leeg om de speler zonder de DWS REST API te gebruiken."
+          "password": "Laat leeg om de speler zonder de DWS REST API te gebruiken. Leeg gelaten probeert de integratie eerst automatisch het serienummer van de speler (het fabriekswachtwoord)."
         }
       },
       "reauth_confirm": {
@@ -101,6 +101,9 @@
       },
       "sync_item_duration": {
         "name": "Duur laatste sync-item"
+      },
+      "serial_number": {
+        "name": "Serienummer"
       }
     },
     "switch": {

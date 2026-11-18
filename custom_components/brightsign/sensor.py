@@ -20,6 +20,7 @@ from homeassistant.util import slugify
 
 from . import BrightSignConfigEntry
 from .api import find_key, info_value
+from .const import CONF_SERIAL
 from .coordinator import BrightSignCoordinator, BrightSignData
 from .entity import BrightSignEntity, BrightSignSyncEntity
 from .sync import SyncTracker
@@ -99,6 +100,7 @@ async def async_setup_entry(
         lws = coordinator.data.lws if coordinator.data else None
         for name in sorted(lws.user_vars) if lws else []:
             entities.append(BrightSignUserVariableSensor(coordinator, name))
+    entities.append(SerialNumberSensor(coordinator))
     entities += [
         SyncItemSensor(coordinator, tracker),
         SyncItemStartedSensor(coordinator, tracker),
@@ -121,6 +123,26 @@ class BrightSignSensor(BrightSignEntity, SensorEntity):
     @property
     def native_value(self) -> Any:
         return self.entity_description.value_fn(self.coordinator.data)
+
+
+class SerialNumberSensor(BrightSignEntity, SensorEntity):
+    """Serial number (also the factory default DWS password)."""
+
+    _attr_translation_key = "serial_number"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: BrightSignCoordinator) -> None:
+        super().__init__(coordinator, "serial_number")
+
+    @property
+    def native_value(self) -> str | None:
+        data = self.coordinator.data
+        identity = data.lws.identity if data and data.lws else {}
+        return (
+            info_value(data.info, "serial")
+            or identity.get("serialNumber")
+            or self.coordinator.config_entry.data.get(CONF_SERIAL)
+        )
 
 
 class BrightSignUserVariableSensor(BrightSignEntity, SensorEntity):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import logging
+import re
 from typing import Any
 
 import voluptuous as vol
@@ -28,6 +29,16 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Default DHCP hostname of a player: brightsign-<serial number>
+_HOSTNAME_SERIAL = re.compile(r"brightsign-([0-9a-z]{6,20})", re.IGNORECASE)
+
+
+def serial_from_hostname(hostname: str | None) -> str | None:
+    """Serial number from a default BrightSign hostname, upper case."""
+    match = _HOSTNAME_SERIAL.fullmatch((hostname or "").split(".")[0])
+    return match.group(1).upper() if match else None
+
 
 PASSWORD_SCHEMA = vol.Schema({vol.Optional(CONF_PASSWORD, default=DEFAULT_PASSWORD): str})
 
@@ -68,13 +79,29 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
             return result.name or self._name or host
         return f"BrightSign {result.model}" if result.model else f"BrightSign {host}"
 
+    def _serial_candidates(self, result: ProbeResult, hint: str | None) -> list[str]:
+        """Serial numbers to try as the factory default DWS password (upper case first)."""
+        candidates: list[str] = []
+        for serial in (hint, self._serial, result.serial):
+            for candidate in (serial.upper(), serial) if serial else ():
+                if candidate not in candidates:
+                    candidates.append(candidate)
+        return candidates[:4]
+
     async def _async_validate(
-        self, host: str, password: str, errors: dict[str, str]
-    ) -> ProbeResult | None:
+        self, host: str, password: str, errors: dict[str, str], serial_hint: str | None = None
+    ) -> tuple[ProbeResult, str] | None:
+        """Probe the player; returns the result and the password that works."""
         result = await self._async_probe(host, password)
         if not result.reachable:
             errors["base"] = "cannot_connect"
             return None
+        if result.auth_failed and not password:
+            for candidate in self._serial_candidates(result, serial_hint):
+                retry = await self._async_probe(host, candidate)
+                if retry.reachable and not retry.auth_failed:
+                    _LOGGER.debug("%s accepted its serial number as DWS password", host)
+                    return retry, candidate
         if result.auth_failed:
             if password:
                 errors[CONF_PASSWORD] = "invalid_auth"
@@ -83,7 +110,7 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
             # The password can be added later with Reconfigure.
             result.rest_scheme = None
             result.fingerprint = None
-        return result
+        return result, password
 
     # ----- manual ----------------------------------------------------------
 
@@ -94,8 +121,9 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
             host = user_input[CONF_HOST].strip()
             password = user_input.get(CONF_PASSWORD, DEFAULT_PASSWORD)
             self._async_abort_entries_match({CONF_HOST: host})
-            result = await self._async_validate(host, password, errors)
-            if result is not None:
+            validated = await self._async_validate(host, password, errors)
+            if validated is not None:
+                result, password = validated
                 await self.async_set_unique_id(result.serial or host)
                 self._abort_if_unique_id_configured(updates={CONF_HOST: host})
                 return self.async_create_entry(
@@ -121,6 +149,7 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
         """Player found by its BrightSign MAC address or hostname."""
         self._host = discovery_info.ip
         self._mac = format_mac(discovery_info.macaddress)
+        self._serial = serial_from_hostname(discovery_info.hostname)
         for entry in self._async_current_entries(include_ignore=False):
             if entry.data.get(CONF_MAC) == self._mac and entry.data.get(CONF_HOST) != self._host:
                 self.hass.config_entries.async_update_entry(
@@ -154,8 +183,9 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
         host = self._host or ""
         if user_input is not None:
             password = user_input.get(CONF_PASSWORD, DEFAULT_PASSWORD)
-            result = await self._async_validate(host, password, errors)
-            if result is not None:
+            validated = await self._async_validate(host, password, errors)
+            if validated is not None:
+                result, password = validated
                 if result.serial and result.serial != self.unique_id:
                     await self.async_set_unique_id(result.serial, raise_on_progress=False)
                     self._abort_if_unique_id_configured(updates={CONF_HOST: host})
@@ -180,8 +210,11 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             host = user_input[CONF_HOST].strip()
             password = user_input.get(CONF_PASSWORD, DEFAULT_PASSWORD)
-            result = await self._async_validate(host, password, errors)
-            if result is not None:
+            validated = await self._async_validate(
+                host, password, errors, entry.data.get(CONF_SERIAL)
+            )
+            if validated is not None:
+                result, password = validated
                 return self.async_update_reload_and_abort(
                     entry,
                     data_updates={
@@ -221,8 +254,11 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             password = user_input.get(CONF_PASSWORD, DEFAULT_PASSWORD)
-            result = await self._async_validate(entry.data[CONF_HOST], password, errors)
-            if result is not None:
+            validated = await self._async_validate(
+                entry.data[CONF_HOST], password, errors, entry.data.get(CONF_SERIAL)
+            )
+            if validated is not None:
+                result, password = validated
                 return self.async_update_reload_and_abort(
                     entry,
                     data_updates={

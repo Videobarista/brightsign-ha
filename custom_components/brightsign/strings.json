@@ -11,7 +11,7 @@
         },
         "data_description": {
           "host": "IP address or hostname of the BrightSign player.",
-          "password": "Optional. Leave empty if the player has no password or you don't know it: the player is then added with basic entities (online, sync) and you can add the password later with Reconfigure. The user is always \"admin\"; the factory default password is the player's serial number."
+          "password": "Optional. Leave empty if the player has no password or you don't know it: the player is then added with basic entities (online, sync) and you can add the password later with Reconfigure. The user is always \"admin\"; the factory default password is the player's serial number. Left empty, the integration first tries the player's serial number (the factory default password) automatically."
         }
       },
       "discovery_confirm": {
@@ -21,7 +21,7 @@
           "password": "DWS password (optional)"
         },
         "data_description": {
-          "password": "Optional. Leave empty if the player has no password or you don't know it: the player is then added with basic entities (online, sync) and you can add the password later with Reconfigure."
+          "password": "Optional. Leave empty if the player has no password or you don't know it: the player is then added with basic entities (online, sync) and you can add the password later with Reconfigure. Left empty, the integration first tries the player's serial number (the factory default password) automatically."
         }
       },
       "reconfigure": {
@@ -33,7 +33,7 @@
         },
         "data_description": {
           "host": "IP address or hostname of the BrightSign player.",
-          "password": "Leave empty to use the player without the DWS REST API."
+          "password": "Leave empty to use the player without the DWS REST API. Left empty, the integration first tries the player's serial number (the factory default password) automatically."
         }
       },
       "reauth_confirm": {
@@ -101,6 +101,9 @@
       },
       "sync_item_duration": {
         "name": "Last sync item duration"
+      },
+      "serial_number": {
+        "name": "Serial number"
       }
     },
     "switch": {

@@ -9,6 +9,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.brightsign.api import ProbeResult
+from custom_components.brightsign.config_flow import serial_from_hostname
 from custom_components.brightsign.const import (
     CONF_FINGERPRINT,
     CONF_HAS_LWS,
@@ -256,3 +257,61 @@ async def test_reconfigure_adds_password(hass: HomeAssistant) -> None:
     assert entry.data[CONF_HOST] == "10.0.0.51"
     assert entry.data[CONF_REST_SCHEME] == "https"
     assert entry.data[CONF_FINGERPRINT] == "ab" * 32
+
+
+async def test_dhcp_hostname_serial_used_as_default_password(hass: HomeAssistant) -> None:
+    """Without a password the serial from the DHCP hostname is tried (upper case)."""
+    info = DhcpServiceInfo(
+        ip="10.0.0.60", hostname="brightsign-abc123456", macaddress="90ac3f000001"
+    )
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_DHCP}, data=info
+    )
+    probe = AsyncMock(side_effect=[AUTH_FAILED(), REST_OK()])
+    with patch(PROBE, probe):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_PASSWORD: ""}
+        )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_PASSWORD] == "ABC123456"
+    assert result["data"][CONF_REST_SCHEME] == "https"
+    assert probe.call_count == 2
+
+
+async def test_user_serial_from_presentation_used_as_default_password(hass: HomeAssistant) -> None:
+    """The serial reported by the presentation (no auth needed) is tried as password."""
+    first = ProbeResult(
+        reachable=True, rest_scheme="https", auth_failed=True, lws=True, serial="xae3test0001"
+    )
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    with patch(PROBE, AsyncMock(side_effect=[first, REST_OK()])):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_HOST: "10.0.0.61", CONF_PASSWORD: ""}
+        )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_PASSWORD] == "XAE3TEST0001"
+
+
+async def test_serial_rejected_falls_back_to_basic(hass: HomeAssistant) -> None:
+    """When the serial is not the password either, the player is added without REST."""
+    info = DhcpServiceInfo(
+        ip="10.0.0.62", hostname="brightsign-abc123456", macaddress="90ac3f000002"
+    )
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_DHCP}, data=info
+    )
+    with patch(PROBE, AsyncMock(side_effect=[AUTH_FAILED(), AUTH_FAILED(), AUTH_FAILED()])):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_PASSWORD: ""}
+        )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_PASSWORD] == ""
+    assert result["data"][CONF_REST_SCHEME] is None
+
+
+def test_serial_from_hostname() -> None:
+    assert serial_from_hostname("brightsign-abcd12345678.lan") == "ABCD12345678"
+    assert serial_from_hostname("Master1") is None
+    assert serial_from_hostname(None) is None
