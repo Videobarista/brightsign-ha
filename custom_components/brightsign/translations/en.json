@@ -1,0 +1,86 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Add a BrightSign player",
+        "description": "Enter the player's IP address. The password is the local Diagnostic Web Server (DWS) password (user is always \"admin\"; factory default is the serial number). Leave it empty if the player has no password or no DWS.",
+        "data": {
+          "host": "Host",
+          "password": "DWS password"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the BrightSign player.",
+          "password": "Local DWS password. Needed for model, uptime, HDMI status, reboot and CEC control on players with the DWS REST API."
+        }
+      },
+      "discovery_confirm": {
+        "title": "BrightSign player found",
+        "description": "A BrightSign player was found at {host}. Enter its local DWS password if it has one.",
+        "data": {
+          "password": "DWS password"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-enter the DWS password",
+        "description": "The BrightSign player at {host} rejected the stored DWS password.",
+        "data": {
+          "password": "DWS password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the player. Check the IP address and that the player is on.",
+      "invalid_auth": "The player rejected this DWS password."
+    },
+    "abort": {
+      "already_configured": "This player is already configured.",
+      "reauth_successful": "The password was updated."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "online": { "name": "Online" },
+      "hdmi_connected": { "name": "HDMI display connected" },
+      "sync_active": { "name": "Sync group running" }
+    },
+    "button": {
+      "cec_display_on": { "name": "Display on (CEC)" },
+      "cec_display_standby": { "name": "Display standby (CEC)" },
+      "udp_event": { "name": "UDP {name}" }
+    },
+    "sensor": {
+      "os_version": { "name": "OS version" },
+      "uptime": { "name": "Uptime" },
+      "video_mode": { "name": "Video mode" },
+      "autorun_version": { "name": "Autorun version" },
+      "user_variable": { "name": "Variable {name}" },
+      "sync_item": { "name": "Sync item" },
+      "sync_item_started": { "name": "Sync item started" },
+      "sync_item_duration": { "name": "Last sync item duration" }
+    },
+    "switch": {
+      "hdmi_output": { "name": "HDMI output" }
+    }
+  },
+  "services": {
+    "send_udp": {
+      "name": "Send UDP command",
+      "description": "Sends a UDP message, e.g. to trigger a UDP input event in a BrightAuthor presentation.",
+      "fields": {
+        "host": {
+          "name": "Host",
+          "description": "IP address of the player, or a broadcast address such as 255.255.255.255."
+        },
+        "port": {
+          "name": "Port",
+          "description": "UDP receiver port of the presentation (default 5000)."
+        },
+        "message": {
+          "name": "Message",
+          "description": "The UDP command text as defined in the presentation."
+        }
+      }
+    }
+  }
+}
