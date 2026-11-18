@@ -4,6 +4,8 @@ Uses only documented local entry points:
 - the Local Diagnostic Web Server REST API (``/api/v1/...``, digest auth, user ``admin``)
 - the Local Web Server XML API of a BrightAuthor presentation (port 8080)
 - UDP commands to the presentation's UDP receiver port
+- as a read-only fallback for players without the REST API (older BrightSignOS), the Info
+  page of the Diagnostic Web Server (name, model, serial, OS, video mode, uptime)
 
 Everything a player sends is treated as untrusted: responses are size limited, text is
 sanitized and bounded, and UDP commands are validated before they are sent.
@@ -14,6 +16,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 import hashlib
+import html
 import ipaddress
 import json
 import os
@@ -68,6 +71,7 @@ class ProbeResult:
     name: str | None = None
     firmware: str | None = None
     fingerprint: str | None = None
+    legacy: bool = False
 
 
 @dataclass
@@ -269,6 +273,52 @@ def parse_udp_events(root: ET.Element | None) -> tuple[list[dict[str, str]], int
     return events, port
 
 
+# Labels on the Info page of the (pre-REST) Diagnostic Web Server.
+_LEGACY_LABELS = {
+    "name": "name",
+    "description": "description",
+    "model": "model",
+    "unique id": "serial",
+    "boot version": "boot_version",
+    "firmware version": "firmware",
+    "video mode": "video_mode",
+    "uptime": "uptime",
+    "poe": "poe",
+    "ethernet mac": "mac",
+}
+_UPTIME_UNITS = {"day": 86400, "hour": 3600, "minute": 60, "second": 1}
+
+
+def parse_legacy_info(page: str) -> dict[str, str]:
+    """Read the label/value pairs of a Diagnostic Web Server Info page (bounded)."""
+    if not page or len(page) > MAX_RESPONSE_BYTES or "brightsign" not in page.lower():
+        return {}
+    text = re.sub(r"<(script|style)\b[^>]*>.*?</\1\s*>", " ", page, flags=re.S | re.I)
+    text = html.unescape(re.sub(r"<[^>]+>", "\n", text))
+    lines = [line.strip() for line in text.splitlines() if line.strip()][:2000]
+    fields: dict[str, str] = {}
+    for index, line in enumerate(lines):
+        label, _, value = line.partition(":")
+        key = _LEGACY_LABELS.get(label.strip().lower())
+        if not key or key in fields or not _:
+            continue
+        if value.strip():  # "Label: value" on one line
+            fields[key] = sanitize_text(value, 128)
+        elif index + 1 < len(lines):  # "Label:" followed by the value
+            fields[key] = sanitize_text(lines[index + 1], 128)
+    if "video_mode" in fields:
+        fields["video_mode"] = fields["video_mode"].split(" (")[0]
+    return fields if ("serial" in fields or "firmware" in fields) else {}
+
+
+def parse_uptime(text: str | None) -> int | None:
+    """'3 hours 3 minutes' -> seconds."""
+    found = re.findall(r"(\d{1,7})\s*(day|hour|minute|second)", (text or "").lower())
+    if not found:
+        return None
+    return sum(int(number) * _UPTIME_UNITS[unit] for number, unit in found)
+
+
 async def async_send_udp(host: str, port: int, message: str) -> None:
     """Send one validated UDP datagram (broadcast addresses allowed)."""
     if not is_valid_udp_message(message):
@@ -325,14 +375,18 @@ class BrightSignClient:
             raise BrightSignConnectionError("response too large")
         return body
 
-    # ----- REST (local DWS) ------------------------------------------------
+    # ----- HTTP with digest authentication -------------------------------
 
-    async def _rest(self, method: str, path: str, payload: dict | None = None) -> Any:
-        if self.rest_scheme is None:
-            raise BrightSignNotSupported("no REST API")
-        url = f"{self.rest_scheme}://{self.host}{path}"
-        headers = {"Accept": "application/json"}
-        ssl_param = self._ssl()
+    async def _http(
+        self,
+        method: str,
+        url: str,
+        path: str,
+        payload: dict | None = None,
+        accept: str = "application/json",
+        ssl_param: aiohttp.Fingerprint | bool = False,
+    ) -> bytes:
+        headers = {"Accept": accept}
         try:
             async with asyncio.timeout(REQUEST_TIMEOUT):
                 resp = await self._session.request(
@@ -360,11 +414,19 @@ class BrightSignClient:
                         raise BrightSignNotSupported(path)
                     if resp.status >= 400:
                         raise BrightSignConnectionError(f"HTTP {resp.status} for {path}")
-                    body = await self._read_limited(resp)
+                    return await self._read_limited(resp)
         except aiohttp.ServerFingerprintMismatch as err:
             raise BrightSignCertificateError("HTTPS certificate changed") from err
         except (aiohttp.ClientError, TimeoutError) as err:
             raise BrightSignConnectionError(f"{path}: {type(err).__name__}") from err
+
+    # ----- REST (local DWS) ------------------------------------------------
+
+    async def _rest(self, method: str, path: str, payload: dict | None = None) -> Any:
+        if self.rest_scheme is None:
+            raise BrightSignNotSupported("no REST API")
+        url = f"{self.rest_scheme}://{self.host}{path}"
+        body = await self._http(method, url, path, payload, ssl_param=self._ssl())
         if not body.strip():
             return {}
         try:
@@ -401,6 +463,16 @@ class BrightSignClient:
         if not re.fullmatch(r"(?:[0-9a-f]{2}){2,16}", hex_command):
             raise BrightSignError("invalid CEC payload")
         await self._rest("POST", "/api/v1/sendCecX/", {"hexCommand": hex_command})
+
+    async def async_get_legacy_info(self) -> dict[str, str]:
+        """Read-only fallback: the Info page of a pre-REST Diagnostic Web Server."""
+        try:
+            body = await self._http(
+                "GET", f"http://{self.host}/index.html", "/index.html", accept="text/html"
+            )
+        except BrightSignNotSupported:
+            return {}
+        return parse_legacy_info(body.decode("utf-8", errors="replace"))
 
     async def async_fetch_fingerprint(self) -> str | None:
         """SHA-256 fingerprint of the player's HTTPS certificate (for pinning)."""
@@ -490,6 +562,20 @@ class BrightSignClient:
             result.firmware = info_value(info, "FWVersion")
             result.name = info_value(info, "deviceName") or info_value(info, "name")
             break
+        if result.rest_scheme is None and result.reachable:
+            try:
+                legacy = await self.async_get_legacy_info()
+            except BrightSignAuthError:
+                result.auth_failed = True
+                legacy = {}
+            except BrightSignConnectionError:
+                legacy = {}
+            if legacy:
+                result.legacy = True
+                result.serial = legacy.get("serial")
+                result.model = legacy.get("model")
+                result.firmware = legacy.get("firmware")
+                result.name = legacy.get("name")
         if result.rest_scheme == "https" and not result.auth_failed:
             result.fingerprint = await self.async_fetch_fingerprint()
         self.rest_scheme = None if result.auth_failed else result.rest_scheme

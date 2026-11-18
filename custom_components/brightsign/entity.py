@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from homeassistant.const import CONF_HOST
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -19,14 +23,18 @@ def build_device_info(coordinator: BrightSignCoordinator) -> DeviceInfo:
     data = coordinator.data
     info = data.info if data else {}
     identity = data.lws.identity if data and data.lws else {}
+    legacy = data.legacy if data else {}
     device = DeviceInfo(
         identifiers={(DOMAIN, entry.unique_id or entry.entry_id)},
         manufacturer=MANUFACTURER,
         name=entry.title,
-        model=info_value(info, "model"),
-        sw_version=info_value(info, "FWVersion") or identity.get("firmwareVersion"),
+        model=info_value(info, "model") or legacy.get("model"),
+        sw_version=info_value(info, "FWVersion")
+        or identity.get("firmwareVersion")
+        or legacy.get("firmware"),
         serial_number=info_value(info, "serial")
         or identity.get("serialNumber")
+        or legacy.get("serial")
         or entry.data.get(CONF_SERIAL),
         configuration_url=f"http://{entry.data[CONF_HOST]}/",
     )
@@ -75,3 +83,25 @@ class BrightSignSyncEntity(Entity):
 
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(self._tracker.async_add_listener(self.async_write_ha_state))
+
+
+@callback
+def async_add_sync_entities_when_leader(
+    hass: HomeAssistant,
+    coordinator: BrightSignCoordinator,
+    tracker: SyncTracker,
+    platform: str,
+    keys: list[str],
+    factory: Callable[[], list[Entity]],
+    add: Callable[[list[Entity]], None],
+) -> None:
+    """Sync entities only exist for sync leaders: add them now if the player is (or was)
+    one, otherwise as soon as its first sync traffic arrives."""
+    entry = coordinator.config_entry
+    registry = er.async_get(hass)
+    prefix = entry.unique_id or entry.entry_id
+    known = any(registry.async_get_entity_id(platform, DOMAIN, f"{prefix}_{key}") for key in keys)
+    if tracker.seen or known:
+        add(factory())
+    else:
+        tracker.async_on_first_seen(lambda: add(factory()))

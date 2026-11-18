@@ -31,11 +31,15 @@ presentation was made. The integration detects them per player:
 | **DWS REST API** (`/api/v1`, digest auth) | BrightSignOS 8.x+ with local DWS enabled | OS version, uptime, video mode, HDMI display connected, HDMI output on/off, reboot, CEC display on/standby |
 | **Presentation Local Web Server** (port 8080) | BrightAuthor presentation with Local Web Server enabled | Autorun version, one sensor per user variable, one button per UDP input event |
 | **Sync multicast** (224.0.126.10:1539, passive) | Player is the leader of a sync group | Sync group running, current sync item, when it started, last item duration (loop length) |
-| **Network reachability** | Always | Online sensor |
+| **Info page of the Diagnostic Web Server** (read-only fallback) | Older BrightSignOS without the REST API, DWS enabled | Player name, model, serial number, OS version, video mode (resolution), uptime, PoE |
+| **Network reachability** | Always | Online, IP address and serial number sensors |
 
-Only documented control/API interfaces are used. Web interface pages are never scraped, so on
-players without the REST API (older OS versions) you get the online and sync entities, plus the
-`brightsign.send_udp` action.
+The REST API, the presentation's XML API, UDP and sync multicast are documented interfaces.
+For players without the REST API (older BrightSignOS) the integration reads the **Info page** of
+the Diagnostic Web Server as a fallback: read-only, one page, nothing is changed on the player.
+
+Players are named after the name they report (REST API, presentation or Info page), not their
+IP address. Sync entities are only created for players that are a sync **leader**.
 
 ## Discovery
 

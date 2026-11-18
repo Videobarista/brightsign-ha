@@ -76,6 +76,7 @@ async def test_all_traffic_goes_to_the_player() -> None:
             client.async_set_hdmi_output(True),
             client.async_send_cec("4004"),
             client.async_get_lws(),
+            client.async_get_legacy_info(),
         ):
             with pytest.raises(Exception):  # noqa: B017 - every call fails offline
                 await call

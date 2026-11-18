@@ -124,6 +124,7 @@ class SyncTracker:
         self._host = host
         self._unsub: CALLBACK_TYPE | None = None
         self._listeners: list[Callable[[], None]] = []
+        self._first_seen: list[Callable[[], None]] = []
         self._last_seen: float | None = None
         self._last_key: tuple[str, str] | None = None
         self._last_player_time: datetime | None = None
@@ -145,6 +146,17 @@ class SyncTracker:
         if self._unsub is not None:
             self._unsub()
             self._unsub = None
+        self._first_seen.clear()
+
+    @property
+    def seen(self) -> bool:
+        """True once sync traffic from this player was received (it is a sync leader)."""
+        return self._last_seen is not None
+
+    @callback
+    def async_on_first_seen(self, action: Callable[[], None]) -> None:
+        """Run ``action`` once, when the first sync traffic from this player arrives."""
+        self._first_seen.append(action)
 
     @property
     def active(self) -> bool:
@@ -171,6 +183,7 @@ class SyncTracker:
         """Process one decoded datagram from this player."""
         was_active = self.active
         before = self._snapshot()
+        first = self._last_seen is None
         self._last_seen = time.monotonic()
         if message is None:
             self.encrypted = True
@@ -192,6 +205,10 @@ class SyncTracker:
                     self._last_key = key
                     self._last_player_time = stamp
                     self.item = item
+        if first:
+            actions, self._first_seen = self._first_seen, []
+            for action in actions:
+                action()
         if was_active and self._snapshot() == before:
             return  # heartbeat only: nothing to write
         for update in list(self._listeners):

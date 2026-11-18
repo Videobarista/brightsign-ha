@@ -10,6 +10,7 @@ import atheris
 with atheris.instrument_imports():
     from custom_components.brightsign.api import (
         build_digest_header,
+        parse_legacy_info,
         parse_udp_events,
         parse_user_vars,
         parse_xml,
@@ -27,6 +28,7 @@ def test_one_input(data: bytes) -> None:
     decode_sync_message(data)
     player_time(text)
     build_digest_header([text], "GET", "/", "admin", "pw")
+    parse_legacy_info(text)
 
 
 if __name__ == "__main__":

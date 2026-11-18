@@ -26,6 +26,7 @@ from .const import (
     ATTR_MESSAGE,
     ATTR_PORT,
     CONF_FINGERPRINT,
+    CONF_HAS_LEGACY,
     CONF_HAS_LWS,
     CONF_REST_SCHEME,
     DEFAULT_UDP_PORT,
@@ -111,6 +112,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: BrightSignConfigEntry) -
         client,
         has_rest=entry.data.get(CONF_REST_SCHEME) is not None,
         has_lws=entry.data.get(CONF_HAS_LWS, False),
+        has_legacy=entry.data.get(CONF_HAS_LEGACY),  # None: detect once
     )
     await coordinator.async_config_entry_first_refresh()
 

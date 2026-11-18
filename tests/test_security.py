@@ -12,7 +12,9 @@ from custom_components.brightsign.api import (
     find_key,
     is_local_address,
     is_valid_udp_message,
+    parse_legacy_info,
     parse_udp_events,
+    parse_uptime,
     parse_user_vars,
     parse_xml,
     sanitize_text,
@@ -143,3 +145,37 @@ async def test_fuzz_parsers_never_crash(hass: HomeAssistant) -> None:
             data = None
         find_key(data, "serial")
         build_digest_header([text], "GET", "/", "admin", "pw")
+        parse_legacy_info(text)
+        parse_uptime(text)
+
+
+LEGACY_PAGE = """<html><head><title>BrightSign&reg;</title></head><body>
+<ul><li><a href="index.html">INFO</a></li></ul>
+<table><tr><td>Name:</td><td>Lobby</td></tr>
+<tr><td>Model:</td><td>XD1032</td></tr>
+<tr><td>Unique ID:</td><td>ABCD12345678</td></tr>
+<tr><td>Firmware Version:</td><td>7.1.113</td></tr>
+<tr><td>Video Mode:</td><td>1920x1080x50p (1920x1080x50p)</td></tr>
+<tr><td>Uptime:</td><td>3 hours 3 minutes</td></tr>
+<tr><td>PoE:</td><td>Inactive</td></tr></table>
+<script>var x = "Name:";</script></body></html>"""
+
+
+def test_parse_legacy_info_page() -> None:
+    info = parse_legacy_info(LEGACY_PAGE)
+    assert info["name"] == "Lobby"
+    assert info["model"] == "XD1032"
+    assert info["serial"] == "ABCD12345678"
+    assert info["firmware"] == "7.1.113"
+    assert info["video_mode"] == "1920x1080x50p"
+    assert info["poe"] == "Inactive"
+    assert parse_uptime(info["uptime"]) == 3 * 3600 + 3 * 60
+
+
+def test_parse_legacy_info_rejects_other_pages() -> None:
+    assert parse_legacy_info("<html>401 Not authorized</html>") == {}
+    assert parse_legacy_info("<html>BrightSign</html>") == {}
+    assert parse_legacy_info("BrightSign " + "x" * 1_100_000) == {}
+    assert parse_uptime("unknown") is None
+    one_line = parse_legacy_info("<p>BrightSign</p><p>Unique ID: X1</p><p>Firmware Version: 8</p>")
+    assert one_line == {"serial": "X1", "firmware": "8"}

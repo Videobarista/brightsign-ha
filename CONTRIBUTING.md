@@ -31,9 +31,10 @@ results and pull requests are all welcome.
   `ruff.toml` (including the security rules).
 - **Language**: code, comments, documentation and commit messages in English.
 - **No new dependencies** unless there is no reasonable alternative.
-- **Only documented interfaces**: the DWS REST API, the presentation's Local
-  Web Server XML API, UDP commands and passive sync listening. No scraping of
-  web interface pages.
+- **Interfaces**: the DWS REST API, the presentation's Local Web Server XML
+  API, UDP commands and passive sync listening. The only web page that is read
+  is the Info page of the Diagnostic Web Server, as a read-only fallback for
+  players without the REST API; no other pages, and nothing is ever submitted.
 - **Local only**: the integration talks to the configured players only.
   Network code stays in `api.py` (the receive-only sync listener in `sync.py`),
   there are no hard-coded addresses, and `python3 scripts/check_local_only.py`

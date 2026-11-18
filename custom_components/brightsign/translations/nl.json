@@ -104,6 +104,12 @@
       },
       "serial_number": {
         "name": "Serienummer"
+      },
+      "poe": {
+        "name": "PoE"
+      },
+      "ip_address": {
+        "name": "IP-adres"
       }
     },
     "switch": {

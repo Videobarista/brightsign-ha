@@ -20,6 +20,7 @@ from homeassistant.util.ssl import get_default_no_verify_context
 from .api import BrightSignClient, ProbeResult
 from .const import (
     CONF_FINGERPRINT,
+    CONF_HAS_LEGACY,
     CONF_HAS_LWS,
     CONF_MAC,
     CONF_REST_SCHEME,
@@ -69,15 +70,22 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_PASSWORD: password,
             CONF_REST_SCHEME: result.rest_scheme,
             CONF_HAS_LWS: result.lws,
+            CONF_HAS_LEGACY: result.legacy,
             CONF_FINGERPRINT: result.fingerprint,
             CONF_SERIAL: result.serial or self._serial,
             CONF_MAC: self._mac,
         }
 
     def _title(self, host: str, result: ProbeResult) -> str:
+        """Player name, else model/serial; never the IP address."""
         if result.name or self._name:
-            return result.name or self._name or host
-        return f"BrightSign {result.model}" if result.model else f"BrightSign {host}"
+            return result.name or self._name or "BrightSign player"
+        serial = result.serial or self._serial
+        if result.model and serial:
+            return f"BrightSign {result.model} {serial}"
+        if result.model or serial:
+            return f"BrightSign {result.model or serial}"
+        return "BrightSign player"
 
     def _serial_candidates(self, result: ProbeResult, hint: str | None) -> list[str]:
         """Serial numbers to try as the factory default DWS password (upper case first)."""
@@ -110,6 +118,7 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
             # The password can be added later with Reconfigure.
             result.rest_scheme = None
             result.fingerprint = None
+            result.legacy = False
         return result, password
 
     # ----- manual ----------------------------------------------------------
@@ -222,6 +231,7 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_PASSWORD: password,
                         CONF_REST_SCHEME: result.rest_scheme,
                         CONF_HAS_LWS: result.lws,
+                        CONF_HAS_LEGACY: result.legacy,
                         CONF_FINGERPRINT: result.fingerprint,
                         CONF_SERIAL: result.serial or entry.data.get(CONF_SERIAL),
                     },
@@ -265,6 +275,7 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_PASSWORD: password,
                         CONF_REST_SCHEME: result.rest_scheme,
                         CONF_HAS_LWS: result.lws,
+                        CONF_HAS_LEGACY: result.legacy,
                         CONF_FINGERPRINT: result.fingerprint,
                     },
                 )

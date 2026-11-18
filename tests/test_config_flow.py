@@ -12,6 +12,7 @@ from custom_components.brightsign.api import ProbeResult
 from custom_components.brightsign.config_flow import serial_from_hostname
 from custom_components.brightsign.const import (
     CONF_FINGERPRINT,
+    CONF_HAS_LEGACY,
     CONF_HAS_LWS,
     CONF_MAC,
     CONF_REST_SCHEME,
@@ -83,7 +84,7 @@ async def test_user_legacy_player_uses_host_as_id(hass: HomeAssistant) -> None:
             result["flow_id"], {CONF_HOST: "10.0.0.6", CONF_PASSWORD: ""}
         )
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == "BrightSign 10.0.0.6"
+    assert result["title"] == "BrightSign player"
     assert result["data"][CONF_REST_SCHEME] is None
     assert result["data"][CONF_HAS_LWS] is False
     assert result["result"].unique_id == "10.0.0.6"
@@ -313,5 +314,35 @@ async def test_serial_rejected_falls_back_to_basic(hass: HomeAssistant) -> None:
 
 def test_serial_from_hostname() -> None:
     assert serial_from_hostname("brightsign-abcd12345678.lan") == "ABCD12345678"
-    assert serial_from_hostname("Master1") is None
+    assert serial_from_hostname("Lobby") is None
     assert serial_from_hostname(None) is None
+
+
+async def test_legacy_player_named_from_info_page(hass: HomeAssistant) -> None:
+    """An older player is named after the name on its Info page, not its address."""
+    legacy = ProbeResult(
+        reachable=True, legacy=True, name="Lobby", model="XD1032", serial="ABCD12345678"
+    )
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    with patch(PROBE, AsyncMock(return_value=legacy)):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_HOST: "10.0.0.70", CONF_PASSWORD: ""}
+        )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Lobby"
+    assert result["data"][CONF_HAS_LEGACY] is True
+    assert result["result"].unique_id == "ABCD12345678"
+
+
+async def test_title_from_model_and_serial(hass: HomeAssistant) -> None:
+    probe = ProbeResult(reachable=True, legacy=True, model="XD1032", serial="ABCD12345678")
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    with patch(PROBE, AsyncMock(return_value=probe)):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_HOST: "10.0.0.71", CONF_PASSWORD: ""}
+        )
+    assert result["title"] == "BrightSign XD1032 ABCD12345678"

@@ -12,6 +12,7 @@ CONF_SERIAL = "serial"
 CONF_REST_SCHEME = "rest_scheme"
 CONF_HAS_LWS = "has_lws"
 CONF_FINGERPRINT = "fingerprint"
+CONF_HAS_LEGACY = "has_legacy"
 
 DEFAULT_PASSWORD = ""
 DWS_USERNAME = "admin"

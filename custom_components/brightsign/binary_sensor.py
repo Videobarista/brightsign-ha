@@ -13,7 +13,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from . import BrightSignConfigEntry
 from .api import find_key
 from .coordinator import BrightSignCoordinator
-from .entity import BrightSignEntity, BrightSignSyncEntity
+from .entity import BrightSignEntity, BrightSignSyncEntity, async_add_sync_entities_when_leader
 from .sync import SyncTracker
 
 PARALLEL_UPDATES = 0
@@ -26,13 +26,20 @@ async def async_setup_entry(
 ) -> None:
     """Create binary sensors."""
     coordinator = entry.runtime_data.coordinator
-    entities: list[BinarySensorEntity] = [
-        OnlineBinarySensor(coordinator),
-        SyncActiveBinarySensor(coordinator, entry.runtime_data.sync),
-    ]
+    tracker = entry.runtime_data.sync
+    entities: list[BinarySensorEntity] = [OnlineBinarySensor(coordinator)]
     if coordinator.has_rest:
         entities.append(HdmiConnectedBinarySensor(coordinator))
     async_add_entities(entities)
+    async_add_sync_entities_when_leader(
+        hass,
+        coordinator,
+        tracker,
+        "binary_sensor",
+        ["sync_active"],
+        lambda: [SyncActiveBinarySensor(coordinator, tracker)],
+        async_add_entities,
+    )
 
 
 class OnlineBinarySensor(BrightSignEntity, BinarySensorEntity):

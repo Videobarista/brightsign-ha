@@ -13,16 +13,16 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import EntityCategory, UnitOfTime
+from homeassistant.const import CONF_HOST, EntityCategory, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import slugify
 
 from . import BrightSignConfigEntry
-from .api import find_key, info_value
+from .api import find_key, info_value, parse_uptime
 from .const import CONF_SERIAL
 from .coordinator import BrightSignCoordinator, BrightSignData
-from .entity import BrightSignEntity, BrightSignSyncEntity
+from .entity import BrightSignEntity, BrightSignSyncEntity, async_add_sync_entities_when_leader
 from .sync import SyncTracker
 
 PARALLEL_UPDATES = 0
@@ -31,16 +31,18 @@ PARALLEL_UPDATES = 0
 def _uptime(data: BrightSignData) -> Any:
     value = find_key(data.info, "upTimeSeconds")
     try:
-        return int(value) if value is not None else None
+        if value is not None:
+            return int(value)
     except (TypeError, ValueError):
-        return None
+        pass
+    return parse_uptime(data.legacy.get("uptime"))
 
 
 def _video_mode(data: BrightSignData) -> Any:
     mode = find_key(data.video, "activeMode")
     if isinstance(mode, dict):
-        return mode.get("modeName") or find_key(mode, "modeName")
-    return mode or find_key(data.video, "modeName")
+        mode = mode.get("modeName") or find_key(mode, "modeName")
+    return mode or find_key(data.video, "modeName") or data.legacy.get("video_mode")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -55,7 +57,7 @@ REST_SENSORS: tuple[BrightSignSensorDescription, ...] = (
         key="os_version",
         translation_key="os_version",
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: info_value(d.info, "FWVersion"),
+        value_fn=lambda d: info_value(d.info, "FWVersion") or d.legacy.get("firmware"),
     ),
     BrightSignSensorDescription(
         key="uptime",
@@ -71,6 +73,15 @@ REST_SENSORS: tuple[BrightSignSensorDescription, ...] = (
         key="video_mode",
         translation_key="video_mode",
         value_fn=_video_mode,
+    ),
+)
+
+LEGACY_SENSORS: tuple[BrightSignSensorDescription, ...] = (
+    BrightSignSensorDescription(
+        key="poe",
+        translation_key="poe",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda d: d.legacy.get("poe"),
     ),
 )
 
@@ -93,20 +104,30 @@ async def async_setup_entry(
     coordinator = entry.runtime_data.coordinator
     tracker = entry.runtime_data.sync
     entities: list[SensorEntity] = []
-    if coordinator.has_rest:
+    if coordinator.has_rest or coordinator.has_legacy:
         entities += [BrightSignSensor(coordinator, d) for d in REST_SENSORS]
+    if coordinator.has_legacy and not coordinator.has_rest:
+        entities += [BrightSignSensor(coordinator, d) for d in LEGACY_SENSORS]
     if coordinator.has_lws:
         entities += [BrightSignSensor(coordinator, d) for d in LWS_SENSORS]
         lws = coordinator.data.lws if coordinator.data else None
         for name in sorted(lws.user_vars) if lws else []:
             entities.append(BrightSignUserVariableSensor(coordinator, name))
-    entities.append(SerialNumberSensor(coordinator))
-    entities += [
-        SyncItemSensor(coordinator, tracker),
-        SyncItemStartedSensor(coordinator, tracker),
-        SyncItemDurationSensor(coordinator, tracker),
-    ]
+    entities += [SerialNumberSensor(coordinator), IpAddressSensor(coordinator)]
     async_add_entities(entities)
+    async_add_sync_entities_when_leader(
+        hass,
+        coordinator,
+        tracker,
+        "sensor",
+        ["sync_item", "sync_item_started", "sync_item_duration"],
+        lambda: [
+            SyncItemSensor(coordinator, tracker),
+            SyncItemStartedSensor(coordinator, tracker),
+            SyncItemDurationSensor(coordinator, tracker),
+        ],
+        async_add_entities,
+    )
 
 
 class BrightSignSensor(BrightSignEntity, SensorEntity):
@@ -141,8 +162,23 @@ class SerialNumberSensor(BrightSignEntity, SensorEntity):
         return (
             info_value(data.info, "serial")
             or identity.get("serialNumber")
+            or data.legacy.get("serial")
             or self.coordinator.config_entry.data.get(CONF_SERIAL)
         )
+
+
+class IpAddressSensor(BrightSignEntity, SensorEntity):
+    """IP address (or host name) the integration uses for this player."""
+
+    _attr_translation_key = "ip_address"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: BrightSignCoordinator) -> None:
+        super().__init__(coordinator, "ip_address")
+
+    @property
+    def native_value(self) -> str:
+        return self.coordinator.config_entry.data[CONF_HOST]
 
 
 class BrightSignUserVariableSensor(BrightSignEntity, SensorEntity):
