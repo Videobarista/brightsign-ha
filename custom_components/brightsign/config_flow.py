@@ -9,16 +9,30 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.components import network
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+    OptionsFlowWithReload,
+)
 from homeassistant.const import CONF_HOST, CONF_PASSWORD
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import format_mac
+from homeassistant.helpers.selector import (
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+    TextSelector,
+)
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from homeassistant.util.ssl import get_default_no_verify_context
 
-from .api import BrightSignClient, ProbeResult
+from .api import BrightSignClient, ProbeResult, async_scan_for_players, scan_targets
 from .const import (
     CONF_FINGERPRINT,
     CONF_HAS_LEGACY,
@@ -66,6 +80,37 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
         self._mac: str | None = None
         self._serial: str | None = None
         self._name: str | None = None
+        self._found: dict[str, str] = {}  # players found by the network scan: IP -> MAC
+
+    async def _async_scan(self) -> dict[str, str]:
+        """BrightSign players on Home Assistant's own local networks: IP -> MAC."""
+        adapters = await network.async_get_adapters(self.hass)
+        interfaces = [
+            f"{ip['address']}/{ip['network_prefix']}"
+            for adapter in adapters
+            if adapter["enabled"]
+            for ip in adapter["ipv4"]
+        ]
+        found = await async_scan_for_players(scan_targets(interfaces))
+        _LOGGER.debug("Network scan found %d BrightSign player(s)", len(found))
+        return found
+
+    def _async_known_entry(self, mac: str | None, serial: str | None) -> ConfigEntry | None:
+        """Configured entry of this player, by MAC address or serial number."""
+        for entry in self._async_current_entries(include_ignore=False):
+            if not entry.unique_id:
+                continue
+            if mac and entry.data.get(CONF_MAC) == mac:
+                return entry
+            if serial and serial in (entry.unique_id, entry.data.get(CONF_SERIAL)):
+                return entry
+        return None
+
+    def _is_configured(self, host: str, mac: str) -> bool:
+        return any(
+            entry.data.get(CONF_HOST) == host or entry.data.get(CONF_MAC) == mac
+            for entry in self._async_current_entries(include_ignore=False)
+        )
 
     async def _async_probe(self, host: str, password: str) -> ProbeResult:
         client = BrightSignClient(
@@ -136,10 +181,13 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
     # ----- manual ----------------------------------------------------------
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Manual setup by IP address or hostname."""
+        """Pick a player found on the network, or enter an IP address or hostname."""
         errors: dict[str, str] = {}
-        if user_input is not None:
+        if user_input is None:
+            self._found = await self._async_scan()
+        else:
             host = user_input[CONF_HOST].strip()
+            self._mac = self._found.get(host)
             password = user_input.get(CONF_PASSWORD, DEFAULT_PASSWORD)
             self._async_abort_entries_match({CONF_HOST: host})
             validated = await self._async_validate(host, password, errors)
@@ -150,36 +198,50 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(
                     title=self._title(host, result), data=self._entry_data(host, password, result)
                 )
+        found = {ip: mac for ip, mac in self._found.items() if not self._is_configured(ip, mac)}
+        host_selector: SelectSelector | TextSelector = TextSelector()
+        if found:
+            host_selector = SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        SelectOptionDict(value=ip, label=f"{ip} ({mac.upper()})")
+                        for ip, mac in found.items()
+                    ],
+                    custom_value=True,
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            )
         return self.async_show_form(
             step_id="user",
             data_schema=self.add_suggested_values_to_schema(
                 vol.Schema(
                     {
-                        vol.Required(CONF_HOST): str,
+                        vol.Required(CONF_HOST): host_selector,
                         vol.Optional(CONF_PASSWORD, default=DEFAULT_PASSWORD): str,
                     }
                 ),
-                user_input,
+                user_input or ({CONF_HOST: next(iter(found))} if found else None),
             ),
+            description_placeholders={"found": str(len(found))},
             errors=errors,
         )
 
     # ----- discovery -------------------------------------------------------
 
     async def async_step_dhcp(self, discovery_info: DhcpServiceInfo) -> ConfigFlowResult:
-        """Player found by its BrightSign MAC address or hostname."""
-        self._host = discovery_info.ip
-        self._mac = format_mac(discovery_info.macaddress)
+        """Player found by its BrightSign MAC address or hostname, or a known player's address."""
+        self._host = host = discovery_info.ip
+        self._mac = mac = format_mac(discovery_info.macaddress)
         self._serial = serial_from_hostname(discovery_info.hostname)
-        for entry in self._async_current_entries(include_ignore=False):
-            if entry.data.get(CONF_MAC) == self._mac and entry.data.get(CONF_HOST) != self._host:
-                self.hass.config_entries.async_update_entry(
-                    entry, data={**entry.data, CONF_HOST: self._host}
-                )
-                return self.async_abort(reason="already_configured")
-        self._async_abort_entries_match({CONF_HOST: self._host})
-        await self.async_set_unique_id(self._mac)
-        self._abort_if_unique_id_configured(updates={CONF_HOST: self._host})
+        if entry := self._async_known_entry(mac, self._serial):
+            # Known player, maybe at a new address. Aborting through the unique ID also
+            # records this discovery, so Home Assistant offers the player again after it
+            # has been removed.
+            await self.async_set_unique_id(entry.unique_id, raise_on_progress=False)
+            self._abort_if_unique_id_configured(updates={CONF_HOST: host, CONF_MAC: mac})
+        self._async_abort_entries_match({CONF_HOST: host})
+        await self.async_set_unique_id(self._serial or mac)
+        self._abort_if_unique_id_configured(updates={CONF_HOST: host})
         return await self._async_discovered()
 
     async def async_step_zeroconf(self, discovery_info: ZeroconfServiceInfo) -> ConfigFlowResult:
@@ -187,6 +249,9 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
         self._host = discovery_info.host
         self._serial = discovery_info.properties.get("serialnumber") or None
         self._name = discovery_info.properties.get("unitname") or None
+        if entry := self._async_known_entry(None, self._serial):
+            await self.async_set_unique_id(entry.unique_id, raise_on_progress=False)
+            self._abort_if_unique_id_configured(updates={CONF_HOST: self._host})
         self._async_abort_entries_match({CONF_HOST: self._host})
         await self.async_set_unique_id(self._serial or self._host)
         self._abort_if_unique_id_configured(updates={CONF_HOST: self._host})
@@ -299,8 +364,8 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
 
-class BrightSignOptionsFlow(OptionsFlow):
-    """Options for one player."""
+class BrightSignOptionsFlow(OptionsFlowWithReload):
+    """Options for one player; the player reloads when they change."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:

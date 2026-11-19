@@ -4,13 +4,13 @@
     "step": {
       "user": {
         "title": "BrightSign-speler toevoegen",
-        "description": "Vul het IP-adres van de speler in. Het DWS-wachtwoord is optioneel.",
+        "description": "Kies een BrightSign-speler die op het netwerk is gevonden ({found} gevonden), of vul het IP-adres in. Het DWS-wachtwoord is optioneel.",
         "data": {
           "host": "Host",
           "password": "DWS-wachtwoord (optioneel)"
         },
         "data_description": {
-          "host": "IP-adres of hostnaam van de BrightSign-speler.",
+          "host": "Spelers die op het netwerk zijn gevonden staan in de lijst (IP-adres en MAC-adres). Je kunt ook een IP-adres of hostnaam typen.",
           "password": "Optioneel. Laat leeg als de speler geen wachtwoord heeft of je het niet weet: de speler wordt dan toegevoegd met de basis-entiteiten (online, sync) en je kunt het wachtwoord later toevoegen via Opnieuw configureren. De gebruiker is altijd \"admin\"; het fabriekswachtwoord is het serienummer van de speler. Leeg gelaten probeert de integratie eerst automatisch het serienummer van de speler (het fabriekswachtwoord)."
         }
       },

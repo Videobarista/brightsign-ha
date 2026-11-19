@@ -44,9 +44,19 @@ IP address. Sync entities are only created for players that are a sync **leader*
 
 ## Discovery
 
-Players are discovered automatically by their BrightSign MAC address (`90:AC:3F`), DHCP hostname
-(`brightsign-<serial>`) or the mDNS advertisement of a BrightAuthor presentation. You can also add
-a player manually by IP address.
+Players are found in two ways:
+
+- **Automatically**, by their BrightSign MAC address (`90:AC:3F`), DHCP hostname
+  (`brightsign-<serial>`) or the mDNS advertisement of a BrightAuthor presentation. They appear
+  under **Settings → Devices & services → Discovered**. Home Assistant sees a player through
+  DHCP when it requests an address (at start-up), so this can take a while for a player that
+  has been running for some time. A player that changes address is followed automatically.
+- **Network scan** when you choose **Add integration → BrightSign**: the integration looks for
+  BrightSign players in Home Assistant's own local network(s) and lists them by IP and MAC
+  address. You can also type an IP address or hostname.
+
+Can't find a player? Look for MAC addresses starting with `90:AC:3F` in
+**Settings → System → Network → DHCP Browser**, or power-cycle the player.
 
 The **DWS password** (local Diagnostic Web Server, user always `admin`) is **optional**. The
 factory default is the player's serial number. Without it — or when the player has no DWS — the
@@ -144,6 +154,10 @@ What the integration does to protect your players and Home Assistant:
 - **Sync listener**: receive-only. Datagrams above 2 KiB or from non-local addresses are
   ignored, and states are only written when something changes (the heartbeat arrives every
   second).
+- **Network scan**: only when you open **Add integration**, only in Home Assistant's own private
+  IPv4 networks (at most 1024 addresses; a larger network is narrowed to the /24 Home Assistant
+  is in). Each address gets one TCP connection attempt on port 80 that is closed right away;
+  nothing is sent. Players are recognized by their MAC address in the system ARP table.
 - **Gentle on the player**: one poll every 30 seconds, one command at a time.
 
 ### Local only

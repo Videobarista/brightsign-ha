@@ -185,15 +185,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: BrightSignConfigEntry) -
     entry.async_on_unload(udp_events.async_stop)
 
     entry.runtime_data = BrightSignRuntimeData(coordinator, tracker, listener, udp_events)
-    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
-
-
-async def _async_options_updated(hass: HomeAssistant, entry: BrightSignConfigEntry) -> None:
-    """Options changed: reload to apply the UDP port and snapshot interval."""
-    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: BrightSignConfigEntry) -> bool:

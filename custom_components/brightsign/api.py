@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 import hashlib
 import html
@@ -778,3 +779,104 @@ class BrightSignClient:
         if not result.reachable:
             result.reachable = await self.async_reachable()
         return result
+
+
+# ---------------------------------------------------------------------------
+# Network scan (only when the user opens "Add integration")
+# ---------------------------------------------------------------------------
+
+BRIGHTSIGN_OUIS = ("90:ac:3f",)  # IEEE OUI of BrightSign LLC
+MAX_SCAN_HOSTS = 1024
+SCAN_CONCURRENCY = 128
+SCAN_TIMEOUT = 0.8
+ARP_TABLE = "/proc/net/arp"
+_ARP_COMPLETE = 0x2
+_MAC_ADDRESS = re.compile(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}")
+
+
+def is_brightsign_mac(mac: str | None) -> bool:
+    """True for a MAC address of a BrightSign player."""
+    return bool(mac) and str(mac).lower()[:8] in BRIGHTSIGN_OUIS
+
+
+def scan_targets(interfaces: Iterable[str], limit: int = MAX_SCAN_HOSTS) -> list[str]:
+    """Addresses to scan, from Home Assistant's own interfaces ("address/prefix").
+
+    Only private IPv4 networks. A network larger than /22 is narrowed down to the /24
+    Home Assistant itself is in.
+    """
+    targets: list[str] = []
+    seen: set[str] = set()
+    for value in interfaces:
+        try:
+            interface = ipaddress.IPv4Interface(value)
+        except ValueError:
+            continue
+        network = interface.network
+        if not network.is_private or network.is_loopback or network.is_link_local:
+            continue
+        if network.num_addresses > MAX_SCAN_HOSTS:
+            network = ipaddress.IPv4Interface(f"{interface.ip}/24").network
+        for host in network.hosts():
+            address = str(host)
+            if host == interface.ip or address in seen:
+                continue
+            seen.add(address)
+            targets.append(address)
+            if len(targets) >= limit:
+                return targets
+    return targets
+
+
+def parse_arp_table(text: str) -> dict[str, str]:
+    """IP address -> MAC address of the complete entries of a Linux ARP table."""
+    table: dict[str, str] = {}
+    for line in text.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        address, flags, mac = parts[0], parts[2], parts[3].lower()
+        try:
+            complete = int(flags, 16) & _ARP_COMPLETE
+            ipaddress.IPv4Address(address)
+        except ValueError:
+            continue
+        if complete and _MAC_ADDRESS.fullmatch(mac) and mac != "00:00:00:00:00:00":
+            table[address] = mac
+    return table
+
+
+def _read_arp_table() -> str:
+    try:
+        with open(ARP_TABLE, encoding="ascii", errors="replace") as file:
+            return file.read(MAX_RESPONSE_BYTES)
+    except OSError:
+        return ""  # not Linux, or no access: the scan finds nothing
+
+
+async def async_scan_for_players(targets: Iterable[str]) -> dict[str, str]:
+    """BrightSign players on the local network: IP address -> MAC address.
+
+    Knocks once on TCP port 80 of every target (closed right away, nothing is sent),
+    so the operating system learns their MAC addresses, then keeps the addresses of
+    BrightSign players from the ARP table.
+    """
+    semaphore = asyncio.Semaphore(SCAN_CONCURRENCY)
+
+    async def _knock(host: str) -> None:
+        async with semaphore:
+            try:
+                async with asyncio.timeout(SCAN_TIMEOUT):
+                    _reader, writer = await asyncio.open_connection(host, 80)
+            except (OSError, TimeoutError):
+                return
+            writer.close()
+
+    await asyncio.gather(*(_knock(host) for host in targets if is_local_address(host)))
+    table = parse_arp_table(await asyncio.to_thread(_read_arp_table))
+    players = {
+        address: mac
+        for address, mac in table.items()
+        if is_brightsign_mac(mac) and is_local_address(address)
+    }
+    return dict(sorted(players.items(), key=lambda item: ipaddress.IPv4Address(item[0])))

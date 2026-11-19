@@ -25,10 +25,12 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers.discovery_flow import DiscoveryKey
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 PROBE = "custom_components.brightsign.config_flow.BrightSignClient.async_probe"
+SCAN = "custom_components.brightsign.config_flow.BrightSignConfigFlow._async_scan"
 SETUP = "custom_components.brightsign.async_setup_entry"
 
 
@@ -359,4 +361,108 @@ async def test_options_flow(hass: HomeAssistant) -> None:
         result["flow_id"], {CONF_UDP_PORT: 5001, CONF_SNAPSHOT_INTERVAL: 120}
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
     assert entry.options == {CONF_UDP_PORT: 5001, CONF_SNAPSHOT_INTERVAL: 120}
+
+
+async def test_user_picks_player_found_on_network(hass: HomeAssistant) -> None:
+    found = {"10.0.0.70": "90:ac:3f:00:00:70", "10.0.0.71": "90:ac:3f:00:00:71"}
+    MockConfigEntry(domain=DOMAIN, unique_id="OTHER", data={CONF_HOST: "10.0.0.71"}).add_to_hass(
+        hass
+    )
+    with patch(SCAN, AsyncMock(return_value=found)):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+    assert result["type"] is FlowResultType.FORM
+    assert result["description_placeholders"] == {"found": "1"}  # .71 is already configured
+    with patch(PROBE, AsyncMock(return_value=REST_OK())):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_HOST: "10.0.0.70", CONF_PASSWORD: ""}
+        )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_HOST] == "10.0.0.70"
+    assert result["data"][CONF_MAC] == "90:ac:3f:00:00:70"
+
+
+async def test_user_without_players_found_can_type_address(hass: HomeAssistant) -> None:
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    assert result["description_placeholders"] == {"found": "0"}
+    with patch(PROBE, AsyncMock(return_value=REST_OK())):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_HOST: " 10.0.0.72 ", CONF_PASSWORD: ""}
+        )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_HOST] == "10.0.0.72"
+    assert result["data"][CONF_MAC] is None
+
+
+async def test_dhcp_unknown_player_uses_serial_from_hostname(hass: HomeAssistant) -> None:
+    info = DhcpServiceInfo(
+        ip="10.0.0.62", hostname="brightsign-abc123456", macaddress="90ac3f000062"
+    )
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_DHCP}, data=info
+    )
+    assert result["step_id"] == "discovery_confirm"
+    progress = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    assert progress[0]["context"]["unique_id"] == "ABC123456"
+
+
+async def test_dhcp_known_player_by_serial_is_updated_and_remembered(hass: HomeAssistant) -> None:
+    """A known player at a new address: updated, and the discovery is stored for rediscovery."""
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id="ABC123456", data={CONF_HOST: "10.0.0.60", CONF_MAC: None}
+    )
+    entry.add_to_hass(hass)
+    key = DiscoveryKey(domain="dhcp", key="90ac3f000061", version=1)
+    info = DhcpServiceInfo(
+        ip="10.0.0.61", hostname="brightsign-abc123456", macaddress="90ac3f000061"
+    )
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": config_entries.SOURCE_DHCP, "discovery_key": key},
+        data=info,
+    )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    assert entry.data[CONF_HOST] == "10.0.0.61"
+    assert entry.data[CONF_MAC] == "90:ac:3f:00:00:61"
+    assert key in entry.discovery_keys.get("dhcp", ())
+
+
+async def test_dhcp_other_device_on_old_address_is_not_merged(hass: HomeAssistant) -> None:
+    """A different player that got a known player's old address is not mixed up with it."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="SERIAL1",
+        data={CONF_HOST: "10.0.0.20", CONF_MAC: "90:ac:3f:04:95:aa"},
+    )
+    entry.add_to_hass(hass)
+    info = DhcpServiceInfo(ip="10.0.0.20", hostname="brightsign-x", macaddress="90ac3f0495bb")
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_DHCP}, data=info
+    )
+    assert result["type"] is FlowResultType.ABORT  # same address, unknown: no duplicate
+    assert entry.data[CONF_MAC] == "90:ac:3f:04:95:aa"
+
+
+async def test_zeroconf_known_player_updates_address(hass: HomeAssistant) -> None:
+    entry = MockConfigEntry(domain=DOMAIN, unique_id="XAE3TEST0001", data={CONF_HOST: "10.0.0.40"})
+    entry.add_to_hass(hass)
+    info = ZeroconfServiceInfo(
+        ip_address=ip_address("10.0.0.41"),
+        ip_addresses=[ip_address("10.0.0.41")],
+        hostname="brightsign-XAE3TEST0001.local.",
+        name="BrightSign Web Service._http._tcp.local.",
+        port=8080,
+        type="_http._tcp.local.",
+        properties={"serialnumber": "XAE3TEST0001", "unitname": "Lobby"},
+    )
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_ZEROCONF}, data=info
+    )
+    assert result["type"] is FlowResultType.ABORT
+    assert entry.data[CONF_HOST] == "10.0.0.41"

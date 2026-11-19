@@ -1,6 +1,9 @@
 {
   "domain": "brightsign",
   "name": "BrightSign",
+  "after_dependencies": [
+    "network"
+  ],
   "codeowners": [
     "@Videobarista"
   ],
@@ -11,6 +14,9 @@
     },
     {
       "hostname": "brightsign-*"
+    },
+    {
+      "registered_devices": true
     }
   ],
   "documentation": "https://github.com/Videobarista/brightsign-ha",
@@ -18,7 +24,7 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/Videobarista/brightsign-ha/issues",
   "requirements": [],
-  "version": "0.4.0",
+  "version": "0.4.1",
   "zeroconf": [
     {
       "type": "_http._tcp.local.",

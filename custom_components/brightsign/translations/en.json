@@ -4,13 +4,13 @@
     "step": {
       "user": {
         "title": "Add a BrightSign player",
-        "description": "Enter the player's IP address. The DWS password is optional.",
+        "description": "Pick a BrightSign player found on the network ({found} found), or enter its IP address. The DWS password is optional.",
         "data": {
           "host": "Host",
           "password": "DWS password (optional)"
         },
         "data_description": {
-          "host": "IP address or hostname of the BrightSign player.",
+          "host": "Players found on the network are listed (IP address and MAC address). You can also type an IP address or hostname.",
           "password": "Optional. Leave empty if the player has no password or you don't know it: the player is then added with basic entities (online, sync) and you can add the password later with Reconfigure. The user is always \"admin\"; the factory default password is the player's serial number. Left empty, the integration first tries the player's serial number (the factory default password) automatically."
         }
       },
