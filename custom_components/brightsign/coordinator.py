@@ -306,8 +306,6 @@ class BrightSignCoordinator(DataUpdateCoordinator[BrightSignData]):
             entry, title=name, data={**entry.data, CONF_ADOPTED_NAME: name}
         )
         registry = dr.async_get(self.hass)
-        device = registry.async_get_device(
-            identifiers={(DOMAIN, entry.unique_id or entry.entry_id)}
-        )
-        if device is not None and device.name_by_user is None:
-            registry.async_update_device(device.id, name=name)
+        for device in dr.async_entries_for_config_entry(registry, entry.entry_id):
+            if device.name_by_user is None:
+                registry.async_update_device(device.id, name=name)

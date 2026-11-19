@@ -18,7 +18,7 @@ from custom_components.brightsign.const import (
 from custom_components.brightsign.coordinator import BrightSignCoordinator
 from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers import device_registry as dr, issue_registry as ir
 
 
 def _client(serial: str) -> MagicMock:
@@ -125,11 +125,18 @@ async def test_adopted_name_follows_the_player(hass: HomeAssistant) -> None:
         },
     )
     entry.add_to_hass(hass)
+    registry = dr.async_get(hass)
+    device = registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "AAAA11111111")},
+        name="Old presentation",
+    )
     coordinator = BrightSignCoordinator(
         hass, entry, _client("AAAA11111111"), has_rest=True, has_lws=False
     )
     await coordinator._async_update_data()
     assert entry.title == "Wall-leader"  # the unit name the player reports now
+    assert registry.async_get(device.id).name == "Wall-leader"
 
     hass.config_entries.async_update_entry(entry, title="Lobby screen")  # renamed by the user
     await coordinator._async_update_data()
