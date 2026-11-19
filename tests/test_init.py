@@ -63,6 +63,7 @@ async def test_basic_player_and_sync_role(hass: HomeAssistant) -> None:
         domain=DOMAIN,
         unique_id="ABCD12345678",
         title="Wall-leader",
+        minor_version=2,
         data={
             CONF_HOST: "10.0.0.5",
             CONF_PASSWORD: "",
@@ -78,6 +79,10 @@ async def test_basic_player_and_sync_role(hass: HomeAssistant) -> None:
         patch(f"{CLIENT}.async_reachable", AsyncMock(return_value=True)),
         patch(
             f"{CLIENT}.async_get_lws", AsyncMock(side_effect=BrightSignConnectionError("closed"))
+        ),
+        patch(
+            f"{CLIENT}.async_get_legacy_info",
+            AsyncMock(side_effect=BrightSignConnectionError("closed")),
         ),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
@@ -114,6 +119,7 @@ async def test_rest_player_entities(hass: HomeAssistant) -> None:
         domain=DOMAIN,
         unique_id="UJE2TEST0001",
         title="BrightSign XT1144 UJE2TEST0001",
+        minor_version=2,
         data={
             CONF_HOST: "10.0.0.50",
             CONF_PASSWORD: "UJE2TEST0001",
@@ -150,5 +156,33 @@ async def test_rest_player_entities(hass: HomeAssistant) -> None:
         storage = _entity_id(hass, "sensor", "UJE2TEST0001_storage_used")
         assert hass.states.get(storage).state == "50.0"
 
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+
+
+async def test_migration_detects_the_info_page_again(hass: HomeAssistant) -> None:
+    """Entries from 0.3.0 (minor version 1) look for the Info page again."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="ABCD12345679",
+        title="Old player",
+        data={
+            CONF_HOST: "10.0.0.9",
+            CONF_REST_SCHEME: None,
+            CONF_HAS_LWS: False,
+            CONF_HAS_LEGACY: False,
+        },
+    )
+    entry.add_to_hass(hass)
+    legacy = AsyncMock(return_value={"serial": "ABCD12345679", "firmware": "7.1.113"})
+    with (
+        patch(f"{CLIENT}.async_get_legacy_info", legacy),
+        patch(f"{CLIENT}.async_reachable", AsyncMock(return_value=True)),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        assert entry.minor_version == 2
+        assert entry.data[CONF_HAS_LEGACY] is True
+        legacy.assert_called()
         assert await hass.config_entries.async_unload(entry.entry_id)
         await hass.async_block_till_done()
