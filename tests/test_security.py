@@ -12,10 +12,12 @@ from custom_components.brightsign.api import (
     find_key,
     is_local_address,
     is_valid_udp_message,
+    parse_edid,
     parse_legacy_info,
     parse_udp_events,
     parse_uptime,
     parse_user_vars,
+    parse_video_modes,
     parse_xml,
     sanitize_text,
     unwrap,
@@ -147,6 +149,8 @@ async def test_fuzz_parsers_never_crash(hass: HomeAssistant) -> None:
         build_digest_header([text], "GET", "/", "admin", "pw")
         parse_legacy_info(text)
         parse_uptime(text)
+        parse_edid(text)
+        parse_video_modes(data if isinstance(data, list) else [text])
 
 
 LEGACY_PAGE = """<html><head><title>BrightSign&reg;</title></head><body>
@@ -184,3 +188,38 @@ def test_parse_legacy_info_rejects_other_pages() -> None:
     assert empty_name["model"] == "XD1032"
     one_line = parse_legacy_info("<p>BrightSign</p><p>Unique ID: X1</p><p>Firmware Version: 8</p>")
     assert one_line == {"serial": "X1", "firmware": "8"}
+
+
+def _edid(manufacturer: str, product: int, name: str) -> str:
+    code = 0
+    for char in manufacturer:
+        code = (code << 5) | (ord(char) - 64)
+    raw = bytearray(128)
+    raw[0:8] = bytes.fromhex("00ffffffffffff00")
+    raw[8:10] = code.to_bytes(2, "big")
+    raw[10:12] = product.to_bytes(2, "little")
+    raw[54:72] = b"\x00\x00\x00\xfc\x00" + name.encode().ljust(13, b"\x0a")
+    return raw.hex()
+
+
+def test_parse_edid_identifies_display() -> None:
+    info = parse_edid(_edid("SAM", 0x7123, "QM55B"))
+    assert info["manufacturer"] == "Samsung"
+    assert info["model"] == "QM55B"
+    assert info["product_code"] == "7123"
+    assert parse_edid("00" * 128) == {}  # power save: zeroes
+    assert parse_edid("not hex") == {}
+    assert parse_edid({"manufacturer": "LG\x00", "monitorName": "65UH5"}) == {
+        "manufacturer": "LG",
+        "model": "65UH5",
+    }
+
+
+def test_parse_video_modes_validated_and_bounded() -> None:
+    modes = parse_video_modes(
+        [{"modeName": "1920x1080x60p"}, "3840x2160x30p", {"name": "bad mode;rm"}, 42]
+        + [f"{i}x{i}x60p" for i in range(100, 300)]
+    )
+    assert modes[:2] == ["1920x1080x60p", "3840x2160x30p"]
+    assert "bad mode;rm" not in modes
+    assert len(modes) == MAX_ITEMS

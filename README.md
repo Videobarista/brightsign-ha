@@ -28,8 +28,9 @@ presentation was made. The integration detects them per player:
 
 | Interface | When available | What you get |
 |---|---|---|
-| **DWS REST API** (`/api/v1`, digest auth) | BrightSignOS 8.x+ with local DWS enabled | OS version, uptime, video mode, HDMI display connected, HDMI output on/off, reboot, CEC display on/standby |
-| **Presentation Local Web Server** (port 8080) | BrightAuthor presentation with Local Web Server enabled | Autorun version, one sensor per user variable, one button per UDP input event |
+| **DWS REST API** (`/api/v1`, digest auth) | BrightSignOS 8.x+ with local DWS enabled | OS version, uptime, video mode (read and **change**), HDMI display connected, **connected display** (make/model from EDID), HDMI output on/off, **screenshot camera**, **SD card free/used**, reboot, CEC display on/standby, `brightsign.send_command` |
+| **Presentation Local Web Server** (port 8080/8008) | BrightAuthor presentation with Local Web Server enabled | Autorun version, one **text entity per user variable** (read and change), one button per UDP input event |
+| **UDP messages from the presentation** (receive-only) | Presentation sends UDP (e.g. *Send UDP* command) to Home Assistant | **UDP message** event entity, **Last UDP message** sensor, `brightsign_udp_message` bus event |
 | **Sync multicast** (224.0.126.10:1539, passive) | Player is the leader of a sync group | Sync group running, current sync item, when it started, last item duration (loop length) |
 | **Info page of the Diagnostic Web Server** (read-only fallback) | Older BrightSignOS without the REST API, DWS enabled | Player name, model, serial number, OS version, video mode (resolution), uptime, PoE |
 | **Network reachability** | Always | Online, IP address and serial number sensors |
@@ -61,6 +62,15 @@ stops working, Home Assistant asks for the new one (re-authentication).
 3. Discovered players appear under **Settings → Devices & services**; or click **Add integration**
    and search for **BrightSign**.
 
+## Options
+
+**Settings → Devices & services → BrightSign → ⋮ → Options** per player:
+
+| Option | Default | Meaning |
+|---|---|---|
+| UDP port for messages from the presentation | 5000 (or the port the presentation reports) | Where the presentation sends its UDP messages (*UDP destination port*) |
+| Seconds between screenshots | 60 | Minimum time between two screenshots; each one is written to, and removed from, the player's SD card |
+
 ## Actions
 
 ### `brightsign.send_udp`
@@ -72,6 +82,27 @@ Sends a UDP message, e.g. to trigger a UDP input event of a BrightAuthor present
 | `host` | Player IP, or a broadcast address such as `255.255.255.255` |
 | `port` | UDP receiver port of the presentation (default `5000`) |
 | `message` | Command text as defined in the presentation |
+
+### `brightsign.send_command`
+
+Sends a command through the DWS REST API (players with the REST API). The player delivers
+it to the presentation as a UDP message on port 5000.
+
+| Field | Description |
+|---|---|
+| `device_id` | The BrightSign player |
+| `command` | Command text (1-1024 printable ASCII characters) |
+
+### Event `brightsign_udp_message`
+
+Fired for every UDP message from a player, with `device_id`, `host` and `message`. Use it
+(or the **UDP message** event entity) as an automation trigger.
+
+## Testing and demo
+
+[docs/TESTING.md](docs/TESTING.md) has a checklist per feature, how to set up a
+BrightAuthor:connected presentation that sends UDP messages and user variables, and a tiny
+UDP demo presentation (`demo/udp-demo/autorun.brs`) for a spare SD card.
 
 ## Notes
 
@@ -107,6 +138,9 @@ What the integration does to protect your players and Home Assistant:
 - **UDP commands**: the `brightsign.send_udp` action only accepts IP addresses on the local
   network (private, link-local, broadcast or multicast) and printable ASCII messages up to 1024
   characters.
+- **UDP messages from presentations**: receive-only. Only datagrams from the addresses of
+  configured players are accepted, at most 1 KiB, at most 20 per second per player; text
+  is sanitized. Snapshot files are only downloaded and removed under `remote_snapshots`.
 - **Sync listener**: receive-only. Datagrams above 2 KiB or from non-local addresses are
   ignored, and states are only written when something changes (the heartbeat arrives every
   second).
@@ -119,9 +153,10 @@ automated checks back the **Local only** badge:
 
 - `scripts/check_local_only.py` (the badge's workflow) reads the manifest and the code: local
   IoT class, no cloud or webhook, no extra Python packages, no hard-coded internet addresses,
-  connections and UDP sends only from `api.py`. Two exceptions are allowed explicitly and
-  checked: the receive-only sync multicast listener in `sync.py` (which may not send anything),
-  and the sync group address `224.0.126.10`.
+  connections and UDP sends only from `api.py`. Exceptions are allowed explicitly and
+  checked: the receive-only listeners in `sync.py` (sync multicast) and `udp_events.py`
+  (UDP messages from configured players), which may not send anything, and the sync group
+  address `224.0.126.10`.
 - The tests record every HTTP request, TCP connection and UDP datagram during probing,
   polling and commands and check that all of them go to the configured player; they also check
   that the action refuses public addresses and that the sync listener ignores outside traffic.
@@ -137,7 +172,7 @@ analytics) is up to your Home Assistant settings.
 | --- | --- |
 | Player | Local DWS on with a strong password (BrightSignOS 9 turns it off by default), or off if you do not need REST features. Local Web Server only when the presentation needs it. |
 | Network | Players in an AV/IoT VLAN with fixed addresses (DHCP reservation). No port forwarding. |
-| Firewall: allow | Home Assistant → players TCP 443/80 (DWS) and 8080 (Local Web Server), UDP to the presentation's receiver port (default 5000). Players → Home Assistant UDP 1539 multicast `224.0.126.10` (sync monitoring, optional). |
+| Firewall: allow | Home Assistant → players TCP 443/80 (DWS) and 8080/8008 (Local Web Server), UDP to the presentation's receiver port (default 5000). Players → Home Assistant UDP to the configured message port (default 5000) and UDP 1539 multicast `224.0.126.10` (sync monitoring). |
 | Firewall: block | Players → the rest of the LAN and the internet, except DNS/NTP (and BrightSign cloud if you use it). |
 
 See [SECURITY.md](SECURITY.md) to report a vulnerability and [CONTRIBUTING.md](CONTRIBUTING.md)

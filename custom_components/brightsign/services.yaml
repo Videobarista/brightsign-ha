@@ -18,3 +18,16 @@ send_udp:
       example: "play"
       selector:
         text:
+
+send_command:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: brightsign
+    command:
+      required: true
+      example: "next"
+      selector:
+        text:

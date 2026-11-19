@@ -90,9 +90,6 @@
       "autorun_version": {
         "name": "Autorun-versie"
       },
-      "user_variable": {
-        "name": "Variabele {name}"
-      },
       "sync_item": {
         "name": "Sync-item"
       },
@@ -110,11 +107,50 @@
       },
       "ip_address": {
         "name": "IP-adres"
+      },
+      "connected_display": {
+        "name": "Aangesloten scherm"
+      },
+      "storage_free": {
+        "name": "SD-kaart vrij"
+      },
+      "storage_used": {
+        "name": "SD-kaart gebruikt"
+      },
+      "last_udp_message": {
+        "name": "Laatste UDP-bericht"
       }
     },
     "switch": {
       "hdmi_output": {
         "name": "HDMI-uitgang"
+      }
+    },
+    "camera": {
+      "screenshot": {
+        "name": "Screenshot"
+      }
+    },
+    "select": {
+      "video_mode_select": {
+        "name": "Videomodus"
+      }
+    },
+    "text": {
+      "user_variable": {
+        "name": "Variabele {name}"
+      }
+    },
+    "event": {
+      "udp_message": {
+        "name": "UDP-bericht",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "message": "Bericht"
+            }
+          }
+        }
       }
     }
   },
@@ -134,6 +170,32 @@
         "message": {
           "name": "Bericht",
           "description": "De UDP-commandotekst zoals gedefinieerd in de presentatie."
+        }
+      }
+    },
+    "send_command": {
+      "name": "Commando naar presentatie sturen",
+      "description": "Verstuurt een commando via de DWS REST API; de speler levert het als UDP-bericht op poort 5000 af bij de presentatie (spelers met de REST API).",
+      "fields": {
+        "device_id": {
+          "name": "Speler",
+          "description": "De BrightSign-speler."
+        },
+        "command": {
+          "name": "Commando",
+          "description": "Tekst van het commando (1-1024 printbare ASCII-tekens)."
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "BrightSign-opties",
+        "description": "UDP-berichten: de poort waar de presentatie haar UDP-berichten naartoe stuurt (Presentatie-instellingen > Interactive > Networking > UDP destination port). Screenshots: minimale tijd tussen twee screenshots; elke screenshot wordt op de SD-kaart van de speler gezet en weer verwijderd.",
+        "data": {
+          "udp_port": "UDP-poort voor berichten van de presentatie",
+          "snapshot_interval": "Seconden tussen screenshots"
         }
       }
     }

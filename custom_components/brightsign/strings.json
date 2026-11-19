@@ -90,9 +90,6 @@
       "autorun_version": {
         "name": "Autorun version"
       },
-      "user_variable": {
-        "name": "Variable {name}"
-      },
       "sync_item": {
         "name": "Sync item"
       },
@@ -110,11 +107,50 @@
       },
       "ip_address": {
         "name": "IP address"
+      },
+      "connected_display": {
+        "name": "Connected display"
+      },
+      "storage_free": {
+        "name": "SD card free"
+      },
+      "storage_used": {
+        "name": "SD card used"
+      },
+      "last_udp_message": {
+        "name": "Last UDP message"
       }
     },
     "switch": {
       "hdmi_output": {
         "name": "HDMI output"
+      }
+    },
+    "camera": {
+      "screenshot": {
+        "name": "Screenshot"
+      }
+    },
+    "select": {
+      "video_mode_select": {
+        "name": "Video mode"
+      }
+    },
+    "text": {
+      "user_variable": {
+        "name": "Variable {name}"
+      }
+    },
+    "event": {
+      "udp_message": {
+        "name": "UDP message",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "message": "Message"
+            }
+          }
+        }
       }
     }
   },
@@ -134,6 +170,32 @@
         "message": {
           "name": "Message",
           "description": "The UDP command text as defined in the presentation."
+        }
+      }
+    },
+    "send_command": {
+      "name": "Send command to presentation",
+      "description": "Sends a command through the DWS REST API; the player delivers it to the presentation as a UDP message on port 5000 (players with the REST API).",
+      "fields": {
+        "device_id": {
+          "name": "Player",
+          "description": "The BrightSign player."
+        },
+        "command": {
+          "name": "Command",
+          "description": "Text of the command (1-1024 printable ASCII characters)."
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "BrightSign options",
+        "description": "UDP messages: the port the presentation sends its UDP messages to (Presentation settings > Interactive > Networking > UDP destination port). Screenshots: minimum time between two screenshots; each one is written to, and removed from, the player's SD card.",
+        "data": {
+          "udp_port": "UDP port for messages from the presentation",
+          "snapshot_interval": "Seconds between screenshots"
         }
       }
     }

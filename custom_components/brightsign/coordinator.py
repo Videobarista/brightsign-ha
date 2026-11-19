@@ -20,9 +20,11 @@ from .api import (
     BrightSignConnectionError,
     BrightSignNotSupported,
     LwsData,
+    find_key,
     info_value,
+    parse_edid,
 )
-from .const import CONF_HAS_LEGACY, CONF_SERIAL, DOMAIN, SCAN_INTERVAL
+from .const import CONF_HAS_LEGACY, CONF_SERIAL, DOMAIN, SCAN_INTERVAL, STORAGE_POLL_EVERY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -37,6 +39,9 @@ class BrightSignData:
     power_save: bool | None = None
     lws: LwsData | None = None
     legacy: dict[str, str] = field(default_factory=dict)
+    video_modes: list[str] = field(default_factory=list)
+    display: dict[str, str] = field(default_factory=dict)
+    storage: dict[str, int] = field(default_factory=dict)
 
     @property
     def player_name(self) -> str | None:
@@ -75,6 +80,11 @@ class BrightSignCoordinator(DataUpdateCoordinator[BrightSignData]):
         self.has_rest = has_rest
         self.has_lws = has_lws
         self.has_legacy = has_legacy
+        self._polls = 0
+        self._video_modes: list[str] = []
+        self._display: dict[str, str] = {}
+        self._display_attached: object = None
+        self._storage: dict[str, int] = {}
 
     async def _async_update_data(self) -> BrightSignData:
         data = BrightSignData()
@@ -90,6 +100,7 @@ class BrightSignCoordinator(DataUpdateCoordinator[BrightSignData]):
                     data.power_save = await self.client.async_get_power_save()
                 except BrightSignNotSupported:
                     data.power_save = None
+                await self._async_update_rest_extras(data)
             except BrightSignCertificateError as err:
                 raise ConfigEntryAuthFailed(
                     f"BrightSign {self.client.host}: HTTPS certificate changed"
@@ -122,6 +133,26 @@ class BrightSignCoordinator(DataUpdateCoordinator[BrightSignData]):
             data.online = await self.client.async_reachable()
         self._async_adopt_player_name(data)
         return data
+
+    async def _async_update_rest_extras(self, data: BrightSignData) -> None:
+        """Slow-changing REST data: video modes, connected display, storage."""
+        self._polls += 1
+        attached = find_key(data.video, "attached")
+        try:
+            if not self._video_modes:
+                self._video_modes = await self.client.async_get_video_modes()
+            if attached != self._display_attached or not self._display:
+                self._display_attached = attached
+                self._display = parse_edid(find_key(data.video, "edid"))
+                if not self._display and attached:
+                    self._display = await self.client.async_get_edid()
+            if not self._storage or self._polls % STORAGE_POLL_EVERY == 0:
+                self._storage = await self.client.async_get_storage()
+        except (BrightSignConnectionError, BrightSignNotSupported) as err:
+            _LOGGER.debug("Extra REST data of %s not available: %s", self.client.host, err)
+        data.video_modes = self._video_modes
+        data.display = self._display if attached is not False else {}
+        data.storage = self._storage
 
     async def _async_detect_legacy(self) -> None:
         """Entries made before the Info page fallback: detect it once, quietly."""

@@ -6,9 +6,10 @@ anything that could send data elsewhere:
 
 1. Manifest: the IoT class is local, no cloud or webhook dependencies, and no
    Python requirements other than the ones explicitly allowed below.
-2. No listeners: nothing opens a server, webhook or HTTP view. The one exception
-   is the receive-only listener for BrightSign sync multicast traffic, allowed in
-   one file (see SYNC_LISTENER_FILES); that file may not send anything.
+2. No listeners: nothing opens a server, webhook or HTTP view. The exceptions are
+   the receive-only listeners for BrightSign sync multicast traffic and for UDP
+   messages from configured players (see SYNC_LISTENER_FILES); those files may not
+   send anything.
 3. No other network libraries: only aiohttp (through Home Assistant), asyncio
    streams and a UDP socket for sending player commands are used, and only in
    the files allowed below.
@@ -46,9 +47,10 @@ ALLOWED_REQUIREMENTS: set[str] = set()
 # group (local network only) and the local broadcast address.
 ALLOWED_ADDRESSES: set[str] = {"224.0.126.10", "255.255.255.255"}
 # Files that may use the socket module, and for what.
-SOCKET_FILES = {"api.py", "sync.py"}
-# The only file that may listen: receive-only, for BrightSign sync multicast.
-SYNC_LISTENER_FILES = {"sync.py"}
+SOCKET_FILES = {"api.py", "sync.py", "udp_events.py"}
+# The only files that may listen, receive-only: BrightSign sync multicast and UDP
+# messages from configured players.
+SYNC_LISTENER_FILES = {"sync.py", "udp_events.py"}
 # Files that may send UDP datagrams (commands to the configured player only).
 UDP_SEND_FILES = {"api.py"}
 
@@ -230,7 +232,7 @@ def main(argv: list[str]) -> int:
             print(f"  FAIL {problem}")
         return 1
     print("  OK   manifest: local IoT class, no cloud or webhook, no extra requirements")
-    print("  OK   no listeners, webhooks or HTTP views (except receive-only sync multicast)")
+    print("  OK   no listeners, webhooks or HTTP views (except receive-only sync/UDP messages)")
     print(f"  OK   UDP commands only sent from {', '.join(sorted(UDP_SEND_FILES))}")
     print(f"  OK   connections only from {', '.join(sorted(CONNECTION_FILES))}")
     print("  OK   no hard-coded internet addresses")

@@ -13,17 +13,22 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import CONF_HOST, EntityCategory, UnitOfTime
+from homeassistant.const import CONF_HOST, PERCENTAGE, EntityCategory, UnitOfInformation, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from homeassistant.util import slugify
 
 from . import BrightSignConfigEntry
 from .api import find_key, info_value, parse_uptime
 from .const import CONF_SERIAL
 from .coordinator import BrightSignCoordinator, BrightSignData
-from .entity import BrightSignEntity, BrightSignSyncEntity, async_add_sync_entities_when_leader
+from .entity import (
+    BrightSignEntity,
+    BrightSignSyncEntity,
+    async_add_sync_entities_when_leader,
+    build_device_info,
+)
 from .sync import SyncTracker
+from .udp_events import UdpEventTracker
 
 PARALLEL_UPDATES = 0
 
@@ -76,6 +81,47 @@ REST_SENSORS: tuple[BrightSignSensorDescription, ...] = (
     ),
 )
 
+
+def _display_name(data: BrightSignData) -> str | None:
+    display = data.display
+    name = " ".join(part for part in (display.get("manufacturer"), display.get("model")) if part)
+    return name or display.get("product_code")
+
+
+def _storage_used(data: BrightSignData) -> float | None:
+    size, free = data.storage.get("size"), data.storage.get("free")
+    if not size or free is None:
+        return None
+    return round(100 * (size - free) / size, 1)
+
+
+EXTRA_REST_SENSORS: tuple[BrightSignSensorDescription, ...] = (
+    BrightSignSensorDescription(
+        key="connected_display",
+        translation_key="connected_display",
+        value_fn=_display_name,
+    ),
+    BrightSignSensorDescription(
+        key="storage_free",
+        translation_key="storage_free",
+        device_class=SensorDeviceClass.DATA_SIZE,
+        native_unit_of_measurement=UnitOfInformation.BYTES,
+        suggested_unit_of_measurement=UnitOfInformation.GIGABYTES,
+        suggested_display_precision=1,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda d: d.storage.get("free"),
+    ),
+    BrightSignSensorDescription(
+        key="storage_used",
+        translation_key="storage_used",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_storage_used,
+    ),
+)
+
 LEGACY_SENSORS: tuple[BrightSignSensorDescription, ...] = (
     BrightSignSensorDescription(
         key="poe",
@@ -106,13 +152,12 @@ async def async_setup_entry(
     entities: list[SensorEntity] = []
     if coordinator.has_rest or coordinator.has_legacy:
         entities += [BrightSignSensor(coordinator, d) for d in REST_SENSORS]
+    if coordinator.has_rest:
+        entities += [BrightSignSensor(coordinator, d) for d in EXTRA_REST_SENSORS]
     if coordinator.has_legacy and not coordinator.has_rest:
         entities += [BrightSignSensor(coordinator, d) for d in LEGACY_SENSORS]
     if coordinator.has_lws:
         entities += [BrightSignSensor(coordinator, d) for d in LWS_SENSORS]
-        lws = coordinator.data.lws if coordinator.data else None
-        for name in sorted(lws.user_vars) if lws else []:
-            entities.append(BrightSignUserVariableSensor(coordinator, name))
     entities += [SerialNumberSensor(coordinator), IpAddressSensor(coordinator)]
     async_add_entities(entities)
     async_add_sync_entities_when_leader(
@@ -128,6 +173,13 @@ async def async_setup_entry(
         ],
         async_add_entities,
     )
+    udp_events = entry.runtime_data.udp_events
+    if udp_events.seen:
+        async_add_entities([LastUdpMessageSensor(coordinator, udp_events)])
+    else:
+        udp_events.async_on_first_seen(
+            lambda: async_add_entities([LastUdpMessageSensor(coordinator, udp_events)])
+        )
 
 
 class BrightSignSensor(BrightSignEntity, SensorEntity):
@@ -181,22 +233,6 @@ class IpAddressSensor(BrightSignEntity, SensorEntity):
         return self.coordinator.config_entry.data[CONF_HOST]
 
 
-class BrightSignUserVariableSensor(BrightSignEntity, SensorEntity):
-    """A user variable of the running presentation."""
-
-    _attr_translation_key = "user_variable"
-
-    def __init__(self, coordinator: BrightSignCoordinator, name: str) -> None:
-        super().__init__(coordinator, f"uservar_{slugify(name) or 'var'}")
-        self._var = name
-        self._attr_translation_placeholders = {"name": name}
-
-    @property
-    def native_value(self) -> str | None:
-        lws = self.coordinator.data.lws
-        return lws.user_vars.get(self._var) if lws else None
-
-
 class SyncItemSensor(BrightSignSyncEntity, SensorEntity):
     """Sync item the group plays (when this player is the sync leader)."""
 
@@ -243,3 +279,31 @@ class SyncItemDurationSensor(BrightSignSyncEntity, SensorEntity):
     @property
     def native_value(self) -> float | None:
         return self._tracker.last_item_duration
+
+
+class LastUdpMessageSensor(SensorEntity):
+    """Last UDP message the presentation sent (created on the first message)."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    _attr_translation_key = "last_udp_message"
+
+    def __init__(self, coordinator: BrightSignCoordinator, tracker: UdpEventTracker) -> None:
+        entry = coordinator.config_entry
+        self._tracker = tracker
+        self._attr_unique_id = f"{entry.unique_id or entry.entry_id}_last_udp_message"
+        self._attr_device_info = build_device_info(coordinator)
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(
+            self._tracker.async_add_listener(lambda _message: self.async_write_ha_state())
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        return self._tracker.last_message
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        received = self._tracker.last_received
+        return {"received": received.isoformat() if received else None}

@@ -17,6 +17,8 @@ from custom_components.brightsign.const import (
     CONF_MAC,
     CONF_REST_SCHEME,
     CONF_SERIAL,
+    CONF_SNAPSHOT_INTERVAL,
+    CONF_UDP_PORT,
     DOMAIN,
 )
 from homeassistant import config_entries
@@ -346,3 +348,15 @@ async def test_title_from_model_and_serial(hass: HomeAssistant) -> None:
             result["flow_id"], {CONF_HOST: "10.0.0.71", CONF_PASSWORD: ""}
         )
     assert result["title"] == "BrightSign XD1032 ABCD12345678"
+
+
+async def test_options_flow(hass: HomeAssistant) -> None:
+    entry = MockConfigEntry(domain=DOMAIN, unique_id="X1", data={CONF_HOST: "10.0.0.80"})
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_UDP_PORT: 5001, CONF_SNAPSHOT_INTERVAL: 120}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options == {CONF_UDP_PORT: 5001, CONF_SNAPSHOT_INTERVAL: 120}

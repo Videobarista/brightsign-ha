@@ -24,6 +24,7 @@ from yarl import URL
 from custom_components.brightsign import _local_ip
 from custom_components.brightsign.api import BrightSignClient
 from custom_components.brightsign.sync import _SyncProtocol
+from custom_components.brightsign.udp_events import UdpEventListener, _UdpEventProtocol
 
 ROOT = Path(__file__).resolve().parents[1]
 INTEGRATION = ROOT / "custom_components" / "brightsign"
@@ -55,6 +56,10 @@ class RecordingSession:
         self.urls.append(URL(url))
         raise aiohttp.ClientConnectionError("unreachable")
 
+    def post(self, url: str, **kwargs: Any) -> Any:
+        self.urls.append(URL(url))
+        raise aiohttp.ClientConnectionError("unreachable")
+
 
 async def test_all_traffic_goes_to_the_player() -> None:
     """Probe, polling, commands and UDP only reach the configured player."""
@@ -77,6 +82,13 @@ async def test_all_traffic_goes_to_the_player() -> None:
             client.async_send_cec("4004"),
             client.async_get_lws(),
             client.async_get_legacy_info(),
+            client.async_snapshot(),
+            client.async_get_video_modes(),
+            client.async_set_video_mode("1920x1080x60p"),
+            client.async_get_edid(),
+            client.async_get_storage(),
+            client.async_send_custom("next"),
+            client.async_set_user_variable("Title", "Hello"),
         ):
             with pytest.raises(Exception):  # noqa: B017 - every call fails offline
                 await call
@@ -165,3 +177,18 @@ async def test_send_rejected_by_local_ip_never_reaches_socket() -> None:
         with pytest.raises(vol.Invalid):
             _local_ip("8.8.4.4")
         assert not sock.called
+
+
+def test_udp_event_listener_only_accepts_configured_players() -> None:
+    listener = UdpEventListener(MagicMock(), 5000)
+    listener.hosts.add("10.0.0.5")
+    protocol = _UdpEventProtocol(MagicMock(), listener)
+    with patch("custom_components.brightsign.udp_events.async_dispatcher_send") as send:
+        protocol.datagram_received(b"play", ("10.0.0.6", 5000))  # not a configured player
+        protocol.datagram_received(b"play", ("8.8.8.8", 5000))  # not local
+        protocol.datagram_received(b"x" * 2048, ("10.0.0.5", 5000))  # too large
+        assert not send.called
+        for _ in range(50):
+            protocol.datagram_received(b"state:intro", ("10.0.0.5", 5000))
+        assert send.call_count == 20  # rate limited per second
+        assert send.call_args.args[2] == "state:intro"

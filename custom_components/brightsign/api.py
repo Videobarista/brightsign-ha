@@ -14,11 +14,14 @@ sanitized and bounded, and UDP commands are validated before they are sent.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 from dataclasses import dataclass, field
 import hashlib
 import html
 import ipaddress
 import json
+import logging
 import os
 import re
 import socket
@@ -30,7 +33,13 @@ import aiohttp
 
 from .const import DEFAULT_UDP_PORT, DWS_USERNAME, LWS_PORT, REQUEST_TIMEOUT
 
+_LOGGER = logging.getLogger(__name__)
+
 MAX_RESPONSE_BYTES = 1_048_576  # 1 MiB
+MAX_IMAGE_BYTES = 16_777_216  # 16 MiB (full resolution snapshots)
+MAX_VALUE_LENGTH = 255
+_SNAPSHOT_PATH = re.compile(r"/?[a-z0-9]{2,8}/remote_snapshots/[A-Za-z0-9._-]{1,80}\.(?:jpe?g|png)")
+_VIDEO_MODE = re.compile(r"[A-Za-z0-9:._+-]{3,48}")
 MAX_TEXT_LENGTH = 64
 MAX_ITEMS = 64  # user variables / UDP events taken from one presentation
 MAX_UDP_MESSAGE = 1024
@@ -82,6 +91,7 @@ class LwsData:
     user_vars: dict[str, str] = field(default_factory=dict)
     udp_events: list[dict[str, str]] = field(default_factory=list)
     udp_receive_port: int | None = None
+    udp_destination_port: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -268,9 +278,12 @@ def parse_udp_events(root: ET.Element | None) -> tuple[list[dict[str, str]], int
         if action and is_valid_udp_message(action):
             label = sanitize_text(kids.get("label") or action) or sanitize_text(action)
             events.append({"label": label, "action": action})
-    port_text = xml_fields(root).get("receivePort", "")
-    port = int(port_text) if port_text.isdigit() and 0 < int(port_text) < 65536 else None
-    return events, port
+    return events, _xml_port(root, "receivePort")
+
+
+def _xml_port(root: ET.Element | None, tag: str) -> int | None:
+    port_text = xml_fields(root).get(tag, "")
+    return int(port_text) if port_text.isdigit() and 0 < int(port_text) < 65536 else None
 
 
 # Labels on the Info page of the (pre-REST) Diagnostic Web Server.
@@ -321,6 +334,82 @@ def parse_uptime(text: str | None) -> int | None:
     return sum(int(number) * _UPTIME_UNITS[unit] for number, unit in found)
 
 
+_PNP_VENDORS = {
+    "ACR": "Acer",
+    "AOC": "AOC",
+    "BNQ": "BenQ",
+    "DEL": "Dell",
+    "EIZ": "EIZO",
+    "GSM": "LG",
+    "HIS": "Hisense",
+    "HSD": "Hisense",
+    "HWP": "HP",
+    "IVM": "iiyama",
+    "LEN": "Lenovo",
+    "MEI": "Panasonic",
+    "NEC": "NEC",
+    "PHL": "Philips",
+    "PNS": "Panasonic",
+    "SAM": "Samsung",
+    "SHP": "Sharp",
+    "SNY": "Sony",
+    "TCL": "TCL",
+    "TOS": "Toshiba",
+    "VIZ": "Vizio",
+    "VSC": "ViewSonic",
+}
+
+
+def parse_edid(value: Any) -> dict[str, str]:
+    """Identify the connected display from an EDID (hex string or already parsed dict)."""
+    if isinstance(value, dict):
+        out = {}
+        for key, target in (
+            ("manufacturer", "manufacturer"),
+            ("manufacturerName", "manufacturer"),
+            ("monitorName", "model"),
+            ("productName", "model"),
+            ("serialNumber", "serial"),
+        ):
+            if value.get(key) and target not in out:
+                out[target] = sanitize_text(value[key])
+        return out
+    if not isinstance(value, str):
+        return {}
+    text = re.sub(r"[^0-9a-fA-F]", "", value)[:2048]
+    try:
+        raw = bytes.fromhex(text[: len(text) - len(text) % 2])
+    except ValueError:
+        return {}
+    if len(raw) < 128 or raw[:8] != bytes.fromhex("00ffffffffffff00") or not any(raw[8:10]):
+        return {}  # power save returns zeroes
+    code = (raw[8] << 8) | raw[9]
+    pnp = "".join(chr(((code >> shift) & 0x1F) + 64) for shift in (10, 5, 0))
+    out = {"manufacturer_id": pnp, "product_code": f"{raw[10] | (raw[11] << 8):04X}"}
+    if pnp.isalpha():
+        out["manufacturer"] = _PNP_VENDORS.get(pnp, pnp)
+    for start in (54, 72, 90, 108):
+        block = raw[start : start + 18]
+        if block[:3] == b"\x00\x00\x00" and block[3] in (0xFC, 0xFF):
+            text_value = block[5:18].split(b"\x0a")[0].decode("ascii", errors="ignore").strip()
+            if text_value:
+                out["model" if block[3] == 0xFC else "serial"] = sanitize_text(text_value)
+    return out
+
+
+def parse_video_modes(value: Any) -> list[str]:
+    """Video mode names from a modes response (bounded, validated)."""
+    items = value if isinstance(value, list) else find_key(value, "modes")
+    if not isinstance(items, list):
+        return []
+    modes: list[str] = []
+    for item in items[:256]:
+        name = item.get("modeName") or item.get("name") if isinstance(item, dict) else item
+        if isinstance(name, str) and _VIDEO_MODE.fullmatch(name) and name not in modes:
+            modes.append(name)
+    return modes[:MAX_ITEMS]
+
+
 async def async_send_udp(host: str, port: int, message: str) -> None:
     """Send one validated UDP datagram (broadcast addresses allowed)."""
     if not is_valid_udp_message(message):
@@ -369,11 +458,13 @@ class BrightSignClient:
             return aiohttp.Fingerprint(bytes.fromhex(self.fingerprint))
         return False
 
-    async def _read_limited(self, resp: aiohttp.ClientResponse) -> bytes:
-        if resp.content_length is not None and resp.content_length > MAX_RESPONSE_BYTES:
+    async def _read_limited(
+        self, resp: aiohttp.ClientResponse, limit: int = MAX_RESPONSE_BYTES
+    ) -> bytes:
+        if resp.content_length is not None and resp.content_length > limit:
             raise BrightSignConnectionError("response too large")
-        body = await resp.content.read(MAX_RESPONSE_BYTES + 1)
-        if len(body) > MAX_RESPONSE_BYTES:
+        body = await resp.content.read(limit + 1)
+        if len(body) > limit:
             raise BrightSignConnectionError("response too large")
         return body
 
@@ -387,6 +478,7 @@ class BrightSignClient:
         payload: dict | None = None,
         accept: str = "application/json",
         ssl_param: aiohttp.Fingerprint | bool = False,
+        limit: int = MAX_RESPONSE_BYTES,
     ) -> bytes:
         # Older players announce keep-alive but drop the connection: never reuse it.
         headers = {"Accept": accept, "Connection": "close"}
@@ -417,7 +509,7 @@ class BrightSignClient:
                         raise BrightSignNotSupported(path)
                     if resp.status >= 400:
                         raise BrightSignConnectionError(f"HTTP {resp.status} for {path}")
-                    return await self._read_limited(resp)
+                    return await self._read_limited(resp, limit)
         except aiohttp.ServerFingerprintMismatch as err:
             raise BrightSignCertificateError("HTTPS certificate changed") from err
         except (aiohttp.ClientError, TimeoutError) as err:
@@ -467,6 +559,70 @@ class BrightSignClient:
             raise BrightSignError("invalid CEC payload")
         await self._rest("POST", "/api/v1/sendCecX/", {"hexCommand": hex_command})
 
+    async def async_get_video_modes(self) -> list[str]:
+        """Video modes the connected display supports."""
+        return parse_video_modes(await self._rest("GET", "/api/v1/video/hdmi/output/0/modes/"))
+
+    async def async_set_video_mode(self, mode: str) -> None:
+        """Change the video mode (until the presentation sets its own mode again)."""
+        if not _VIDEO_MODE.fullmatch(mode):
+            raise BrightSignError("invalid video mode")
+        await self._rest("PUT", "/api/v1/video/hdmi/output/0/mode/", {"modeName": mode})
+
+    async def async_get_edid(self) -> dict[str, str]:
+        """Identify the connected display."""
+        data = await self._rest("GET", "/api/v1/video/hdmi/output/0/edid/")
+        return parse_edid(data if not isinstance(data, dict) else (find_key(data, "edid") or data))
+
+    async def async_get_storage(self) -> dict[str, int]:
+        """Free and total bytes of the SD card."""
+        data = await self._rest("GET", "/api/v1/files/sd/")
+        out: dict[str, int] = {}
+        for key, target in (("bytesFree", "free"), ("sizeBytes", "size")):
+            value = find_key(data, key)
+            if isinstance(value, int) and value >= 0:
+                out[target] = value
+        return out
+
+    async def async_send_custom(self, command: str) -> None:
+        """Send custom data to the presentation (delivered by the player on UDP port 5000)."""
+        if not is_valid_udp_message(command):
+            raise BrightSignError("command must be 1-1024 printable ASCII characters")
+        await self._rest("PUT", "/api/v1/custom/", {"command": command, "returnImmediately": True})
+
+    async def async_snapshot(self) -> bytes | None:
+        """Screenshot of what the player shows (JPEG). The file is removed afterwards."""
+        data = await self._rest("POST", "/api/v1/snapshot/", {})
+        filename = find_key(data, "filename")
+        image: bytes | None = None
+        if isinstance(filename, str) and _SNAPSHOT_PATH.fullmatch(filename):
+            path = "/api/v1/files/" + filename.lstrip("/")
+            try:
+                image = await self._http(
+                    "GET",
+                    f"{self.rest_scheme}://{self.host}{path}?contents&stream",
+                    path,
+                    accept="image/*",
+                    ssl_param=self._ssl(),
+                    limit=MAX_IMAGE_BYTES,
+                )
+            except BrightSignError:
+                image = None
+            try:
+                await self._rest("DELETE", path + "/")
+            except BrightSignError as err:
+                _LOGGER.debug("Could not remove snapshot %s from %s: %s", path, self.host, err)
+        if not image:
+            thumbnail = find_key(data, "remoteSnapshotThumbnail")
+            if isinstance(thumbnail, str) and "," in thumbnail:
+                try:
+                    image = base64.b64decode(thumbnail.split(",", 1)[1], validate=True)
+                except (binascii.Error, ValueError):
+                    image = None
+        if image and not image.startswith((b"\xff\xd8", b"\x89PNG")):
+            return None
+        return image
+
     async def async_get_legacy_info(self) -> dict[str, str]:
         """Read-only fallback: the Info page of a pre-REST Diagnostic Web Server."""
         try:
@@ -514,10 +670,33 @@ class BrightSignClient:
         data = LwsData()
         data.identity = xml_fields(await self._lws_get("/GetID"))
         data.user_vars = parse_user_vars(await self._lws_get("/GetUserVars"))
-        data.udp_events, data.udp_receive_port = parse_udp_events(
-            await self._lws_get("/GetUDPEvents")
-        )
+        udp_root = await self._lws_get("/GetUDPEvents")
+        data.udp_events, data.udp_receive_port = parse_udp_events(udp_root)
+        data.udp_destination_port = _xml_port(udp_root, "destinationPort")
         return data
+
+    async def async_set_user_variable(self, name: str, value: str) -> None:
+        """Change a user variable of the presentation (Local Web Server /SetValues)."""
+        if not sanitize_text(name) or sanitize_text(name) != name:
+            raise BrightSignError("invalid user variable name")
+        if len(value) > MAX_VALUE_LENGTH or _CONTROL_CHARS.search(value):
+            raise BrightSignError("value must be at most 255 characters, no control characters")
+        for port in (8008, LWS_PORT):  # user variable page first, then the main web server
+            url = f"http://{self.host}:{port}/SetValues"
+            try:
+                async with asyncio.timeout(REQUEST_TIMEOUT):
+                    async with self._session.post(
+                        url, data={name: value}, headers={"Connection": "close"}
+                    ) as resp:
+                        if resp.status == 404:
+                            continue
+                        if resp.status >= 400:
+                            raise BrightSignConnectionError(f"SetValues: HTTP {resp.status}")
+                        await self._read_limited(resp)
+                        return
+            except (aiohttp.ClientError, TimeoutError):
+                continue
+        raise BrightSignConnectionError("the presentation does not accept user variable changes")
 
     async def async_send_udp_command(self, action: str, port: int | None) -> None:
         """Send a UDP command to this player's UDP receiver port."""

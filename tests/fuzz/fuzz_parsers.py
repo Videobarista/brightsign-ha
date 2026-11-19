@@ -10,9 +10,11 @@ import atheris
 with atheris.instrument_imports():
     from custom_components.brightsign.api import (
         build_digest_header,
+        parse_edid,
         parse_legacy_info,
         parse_udp_events,
         parse_user_vars,
+        parse_video_modes,
         parse_xml,
         xml_fields,
     )
@@ -29,6 +31,8 @@ def test_one_input(data: bytes) -> None:
     player_time(text)
     build_digest_header([text], "GET", "/", "admin", "pw")
     parse_legacy_info(text)
+    parse_edid(text)
+    parse_video_modes([text])
 
 
 if __name__ == "__main__":

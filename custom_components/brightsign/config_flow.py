@@ -9,8 +9,9 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_HOST, CONF_PASSWORD
+from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
@@ -25,7 +26,11 @@ from .const import (
     CONF_MAC,
     CONF_REST_SCHEME,
     CONF_SERIAL,
+    CONF_SNAPSHOT_INTERVAL,
+    CONF_UDP_PORT,
     DEFAULT_PASSWORD,
+    DEFAULT_SNAPSHOT_INTERVAL,
+    DEFAULT_UDP_PORT,
     DOMAIN,
 )
 
@@ -49,6 +54,12 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
     MINOR_VERSION = 2
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        """Options: UDP port for messages from the presentation, screenshot interval."""
+        return BrightSignOptionsFlow()
 
     def __init__(self) -> None:
         self._host: str | None = None
@@ -286,3 +297,24 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders={"host": entry.data[CONF_HOST]},
             errors=errors,
         )
+
+
+class BrightSignOptionsFlow(OptionsFlow):
+    """Options for one player."""
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+        options = self.config_entry.options
+        schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_UDP_PORT, default=options.get(CONF_UDP_PORT, DEFAULT_UDP_PORT)
+                ): vol.All(vol.Coerce(int), vol.Range(min=1024, max=65535)),
+                vol.Optional(
+                    CONF_SNAPSHOT_INTERVAL,
+                    default=options.get(CONF_SNAPSHOT_INTERVAL, DEFAULT_SNAPSHOT_INTERVAL),
+                ): vol.All(vol.Coerce(int), vol.Range(min=10, max=3600)),
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=schema)
