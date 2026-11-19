@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
-from homeassistant.const import EntityCategory
+from homeassistant.const import CONF_HOST, EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
@@ -13,8 +13,15 @@ from homeassistant.helpers.event import async_track_time_interval
 from . import BrightSignConfigEntry
 from .api import find_key
 from .coordinator import BrightSignCoordinator
-from .entity import BrightSignEntity, BrightSignSyncEntity, async_add_sync_entities_when_leader
+from .entity import (
+    BrightSignEntity,
+    BrightSignSyncEntity,
+    BrightSignSyncRoleEntity,
+    async_add_sync_entities_when_leader,
+    async_add_when_in_sync_group,
+)
 from .sync import SyncTracker
+from .sync_monitor import SyncMonitor
 
 PARALLEL_UPDATES = 0
 
@@ -40,6 +47,31 @@ async def async_setup_entry(
         lambda: [SyncActiveBinarySensor(coordinator, tracker)],
         async_add_entities,
     )
+    monitor = entry.runtime_data.monitor
+    async_add_when_in_sync_group(
+        monitor,
+        entry.data[CONF_HOST],
+        lambda: [SyncConflictBinarySensor(coordinator, monitor)],
+        async_add_entities,
+    )
+
+
+class SyncConflictBinarySensor(BrightSignSyncRoleEntity, BinarySensorEntity):
+    """On when the sync group of this player has more than one leader."""
+
+    _attr_translation_key = "sync_conflict"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+
+    def __init__(self, coordinator: BrightSignCoordinator, monitor: SyncMonitor) -> None:
+        super().__init__(coordinator, monitor, "sync_conflict")
+
+    @property
+    def is_on(self) -> bool:
+        return self.sync_view.conflict
+
+    @property
+    def extra_state_attributes(self) -> dict[str, list[str]]:
+        return {"other_leaders": list(self.sync_view.other_leaders)}
 
 
 class OnlineBinarySensor(BrightSignEntity, BinarySensorEntity):

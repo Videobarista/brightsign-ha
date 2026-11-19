@@ -15,19 +15,30 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import CONF_HOST, PERCENTAGE, EntityCategory, UnitOfInformation, UnitOfTime
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import BrightSignConfigEntry
 from .api import find_key, info_value, parse_uptime
-from .const import CONF_SERIAL
+from .const import (
+    CONF_HOSTNAME,
+    CONF_SERIAL,
+    DOMAIN,
+    SYNC_ROLE_FOLLOWER,
+    SYNC_ROLE_LEADER,
+    SYNC_ROLE_NONE,
+)
 from .coordinator import BrightSignCoordinator, BrightSignData
 from .entity import (
     BrightSignEntity,
     BrightSignSyncEntity,
+    BrightSignSyncRoleEntity,
     async_add_sync_entities_when_leader,
+    async_add_when_in_sync_group,
     build_device_info,
 )
 from .sync import SyncTracker
+from .sync_monitor import SyncMonitor
 from .udp_events import UdpEventTracker
 
 PARALLEL_UPDATES = 0
@@ -149,9 +160,17 @@ async def async_setup_entry(
     """Create sensors for what the player offers."""
     coordinator = entry.runtime_data.coordinator
     tracker = entry.runtime_data.sync
+    monitor = entry.runtime_data.monitor
     entities: list[SensorEntity] = []
     if coordinator.has_rest or coordinator.has_legacy:
-        entities += [BrightSignSensor(coordinator, d) for d in REST_SENSORS]
+        # REST players show (and change) the video mode with the select entity
+        entities += [
+            BrightSignSensor(coordinator, d)
+            for d in REST_SENSORS
+            if not (coordinator.has_rest and d.key == "video_mode")
+        ]
+    if coordinator.has_rest:
+        _async_remove_entity(hass, entry, "video_mode")
     if coordinator.has_rest:
         entities += [BrightSignSensor(coordinator, d) for d in EXTRA_REST_SENSORS]
     if coordinator.has_legacy and not coordinator.has_rest:
@@ -159,7 +178,21 @@ async def async_setup_entry(
     if coordinator.has_lws:
         entities += [BrightSignSensor(coordinator, d) for d in LWS_SENSORS]
     entities += [SerialNumberSensor(coordinator), IpAddressSensor(coordinator)]
+    if coordinator.has_rest or coordinator.has_lws or coordinator.has_legacy:
+        entities.append(UnitNameSensor(coordinator))
+    if entry.data.get(CONF_HOSTNAME):
+        entities.append(HostNameSensor(coordinator))
     async_add_entities(entities)
+    async_add_when_in_sync_group(
+        monitor,
+        entry.data[CONF_HOST],
+        lambda: [
+            SyncRoleSensor(coordinator, monitor),
+            SyncGroupSensor(coordinator, monitor),
+            PtpDomainSensor(coordinator, monitor),
+        ],
+        async_add_entities,
+    )
     async_add_sync_entities_when_leader(
         hass,
         coordinator,
@@ -180,6 +213,14 @@ async def async_setup_entry(
         udp_events.async_on_first_seen(
             lambda: async_add_entities([LastUdpMessageSensor(coordinator, udp_events)])
         )
+
+
+def _async_remove_entity(hass: HomeAssistant, entry: BrightSignConfigEntry, key: str) -> None:
+    """Remove an entity this player no longer has (replaced by another entity)."""
+    registry = er.async_get(hass)
+    unique_id = f"{entry.unique_id or entry.entry_id}_{key}"
+    if entity_id := registry.async_get_entity_id("sensor", DOMAIN, unique_id):
+        registry.async_remove(entity_id)
 
 
 class BrightSignSensor(BrightSignEntity, SensorEntity):
@@ -231,6 +272,76 @@ class IpAddressSensor(BrightSignEntity, SensorEntity):
     @property
     def native_value(self) -> str:
         return self.coordinator.config_entry.data[CONF_HOST]
+
+
+class UnitNameSensor(BrightSignEntity, SensorEntity):
+    """Unit name set on the player (its name on the network)."""
+
+    _attr_translation_key = "unit_name"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: BrightSignCoordinator) -> None:
+        super().__init__(coordinator, "unit_name")
+
+    @property
+    def native_value(self) -> str | None:
+        return self.coordinator.data.player_name if self.coordinator.data else None
+
+
+class HostNameSensor(BrightSignEntity, SensorEntity):
+    """Host name the player uses on the network (from DHCP)."""
+
+    _attr_translation_key = "host_name"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: BrightSignCoordinator) -> None:
+        super().__init__(coordinator, "host_name")
+
+    @property
+    def native_value(self) -> str | None:
+        return self.coordinator.config_entry.data.get(CONF_HOSTNAME)
+
+
+class SyncRoleSensor(BrightSignSyncRoleEntity, SensorEntity):
+    """Leader or follower in a sync group (none while no sync traffic is seen)."""
+
+    _attr_translation_key = "sync_role"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = [SYNC_ROLE_LEADER, SYNC_ROLE_FOLLOWER, SYNC_ROLE_NONE]
+
+    def __init__(self, coordinator: BrightSignCoordinator, monitor: SyncMonitor) -> None:
+        super().__init__(coordinator, monitor, "sync_role")
+
+    @property
+    def native_value(self) -> str:
+        return self.sync_view.role
+
+
+class SyncGroupSensor(BrightSignSyncRoleEntity, SensorEntity):
+    """Sync group (roSyncManager domain) this player leads."""
+
+    _attr_translation_key = "sync_group"
+
+    def __init__(self, coordinator: BrightSignCoordinator, monitor: SyncMonitor) -> None:
+        super().__init__(coordinator, monitor, "sync_group")
+
+    @property
+    def native_value(self) -> str | None:
+        return self.sync_view.sync_group
+
+
+class PtpDomainSensor(BrightSignSyncRoleEntity, SensorEntity):
+    """PTP domain of the sync group (shared by its leader and followers)."""
+
+    _attr_translation_key = "ptp_domain"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: BrightSignCoordinator, monitor: SyncMonitor) -> None:
+        super().__init__(coordinator, monitor, "ptp_domain")
+
+    @property
+    def native_value(self) -> int | None:
+        return self.sync_view.ptp_domain
 
 
 class SyncItemSensor(BrightSignSyncEntity, SensorEntity):

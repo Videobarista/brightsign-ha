@@ -4,36 +4,28 @@
     "step": {
       "user": {
         "title": "BrightSign-speler toevoegen",
-        "description": "Kies een BrightSign-speler die op het netwerk is gevonden ({found} gevonden), of vul het IP-adres in. Het DWS-wachtwoord is optioneel.",
+        "description": "Kies een BrightSign-speler die op het netwerk is gevonden ({found} gevonden), of vul het IP-adres in. Een DWS-wachtwoord wordt alleen gevraagd als de speler er een heeft en het serienummer (het fabriekswachtwoord) niet werkt.",
         "data": {
-          "host": "Host",
-          "password": "DWS-wachtwoord (optioneel)"
+          "host": "Host"
         },
         "data_description": {
-          "host": "Spelers die op het netwerk zijn gevonden staan in de lijst (IP-adres en MAC-adres). Je kunt ook een IP-adres of hostnaam typen.",
-          "password": "Optioneel. Laat leeg als de speler geen wachtwoord heeft of je het niet weet: de speler wordt dan toegevoegd met de basis-entiteiten (online, sync) en je kunt het wachtwoord later toevoegen via Opnieuw configureren. De gebruiker is altijd \"admin\"; het fabriekswachtwoord is het serienummer van de speler. Leeg gelaten probeert de integratie eerst automatisch het serienummer van de speler (het fabriekswachtwoord)."
+          "host": "Spelers die op het netwerk zijn gevonden staan in de lijst (IP-adres en MAC-adres). Je kunt ook een IP-adres of hostnaam typen."
         }
       },
       "discovery_confirm": {
         "title": "BrightSign-speler gevonden",
-        "description": "Er is een BrightSign-speler gevonden op {host}. Het DWS-wachtwoord is optioneel: laat het leeg om de speler toe te voegen met de basis-entiteiten.",
-        "data": {
-          "password": "DWS-wachtwoord (optioneel)"
-        },
-        "data_description": {
-          "password": "Optioneel. Laat leeg als de speler geen wachtwoord heeft of je het niet weet: de speler wordt dan toegevoegd met de basis-entiteiten (online, sync) en je kunt het wachtwoord later toevoegen via Opnieuw configureren. Leeg gelaten probeert de integratie eerst automatisch het serienummer van de speler (het fabriekswachtwoord)."
-        }
+        "description": "{name} ({host}) toevoegen?"
       },
       "reconfigure": {
         "title": "BrightSign-speler opnieuw configureren",
-        "description": "Wijzig het adres, of voeg het DWS-wachtwoord toe of wijzig het voor model, uptime, HDMI-status, herstarten en CEC-bediening.",
+        "description": "Wijzig het adres of het DWS-wachtwoord. Laat het wachtwoord leeg om het huidige te houden (of, als er geen is, het serienummer te proberen).",
         "data": {
           "host": "Host",
           "password": "DWS-wachtwoord (optioneel)"
         },
         "data_description": {
           "host": "IP-adres of hostnaam van de BrightSign-speler.",
-          "password": "Laat leeg om de speler zonder de DWS REST API te gebruiken. Leeg gelaten probeert de integratie eerst automatisch het serienummer van de speler (het fabriekswachtwoord)."
+          "password": "Laat leeg om het huidige wachtwoord te houden. Werkt dat ook niet, dan wordt het serienummer (het fabriekswachtwoord) geprobeerd, en anders wordt de speler zonder DWS gebruikt."
         }
       },
       "reauth_confirm": {
@@ -41,6 +33,16 @@
         "description": "De BrightSign-speler op {host} weigerde het opgeslagen DWS-wachtwoord, of het HTTPS-certificaat is veranderd (firmware-update of fabrieksreset). Vul het wachtwoord in om verder te gaan; het huidige certificaat wordt dan vertrouwd. Laat leeg om alleen met de basis-entiteiten verder te gaan.",
         "data": {
           "password": "DWS-wachtwoord (optioneel)"
+        }
+      },
+      "password": {
+        "title": "DWS-wachtwoord",
+        "description": "{name} ({host}) vraagt om een DWS-wachtwoord, en het serienummer (het fabriekswachtwoord) werkt niet. Vul het wachtwoord in, of laat het leeg om de speler zonder DWS toe te voegen (basis-entiteiten). Het wachtwoord kun je later toevoegen met Opnieuw configureren.",
+        "data": {
+          "password": "DWS-wachtwoord (optioneel)"
+        },
+        "data_description": {
+          "password": "De gebruiker is altijd \"admin\". Laat leeg om de speler met basis-entiteiten toe te voegen (online, sync, UDP-berichten)."
         }
       }
     },
@@ -64,6 +66,14 @@
       },
       "sync_active": {
         "name": "Sync-groep actief"
+      },
+      "sync_conflict": {
+        "name": "Sync-conflict",
+        "state_attributes": {
+          "other_leaders": {
+            "name": "Andere leiders"
+          }
+        }
       }
     },
     "button": {
@@ -119,6 +129,26 @@
       },
       "last_udp_message": {
         "name": "Laatste UDP-bericht"
+      },
+      "sync_role": {
+        "name": "Sync-rol",
+        "state": {
+          "leader": "Leider",
+          "follower": "Volger",
+          "none": "Geen"
+        }
+      },
+      "sync_group": {
+        "name": "Sync-groep"
+      },
+      "ptp_domain": {
+        "name": "PTP-domein"
+      },
+      "unit_name": {
+        "name": "Naam speler"
+      },
+      "host_name": {
+        "name": "Hostnaam"
       }
     },
     "switch": {
@@ -198,6 +228,16 @@
           "snapshot_interval": "Seconden tussen screenshots"
         }
       }
+    }
+  },
+  "issues": {
+    "sync_conflict": {
+      "title": "Twee sync-leiders in sync-groep {group}",
+      "description": "Meer dan één BrightSign-speler gedraagt zich als sync-leider in sync-groep {group}: {leaders}. Een sync-groep hoort precies één leider te hebben; de andere spelers zijn volgers. Controleer de sync-instellingen van de presentaties op deze spelers. Deze melding verdwijnt vanzelf zodra er nog maar één leider is."
+    },
+    "address_taken": {
+      "title": "Er antwoordt een andere speler op {host}",
+      "description": "Op {host} antwoordt nu een andere BrightSign-speler, daarom staat {name} offline. Dat gebeurt meestal als spelers zijn verwisseld of via DHCP een nieuw adres kregen. Home Assistant volgt de speler naar het nieuwe adres zodra hij hem op het netwerk ziet; je kunt het nieuwe adres ook invullen met Opnieuw configureren. Deze melding verdwijnt vanzelf."
     }
   }
 }

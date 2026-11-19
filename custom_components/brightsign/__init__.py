@@ -38,7 +38,15 @@ from .const import (
     SERVICE_SEND_UDP,
 )
 from .coordinator import BrightSignCoordinator
-from .sync import SyncListener, SyncTracker, async_acquire_listener
+from .ptp import PtpListener, async_acquire_ptp_listener
+from .sync import (
+    SyncListener,
+    SyncTracker,
+    UdpSyncListener,
+    async_acquire_listener,
+    async_acquire_udp_sync_listener,
+)
+from .sync_monitor import SyncMonitor, async_get_monitor
 from .udp_events import UdpEventTracker, async_register_player
 
 PLATFORMS: list[Platform] = [
@@ -94,6 +102,9 @@ class BrightSignRuntimeData:
     sync: SyncTracker
     listener: SyncListener
     udp_events: UdpEventTracker
+    ptp: PtpListener
+    udp_sync: UdpSyncListener
+    monitor: SyncMonitor
 
 
 type BrightSignConfigEntry = ConfigEntry[BrightSignRuntimeData]
@@ -174,6 +185,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: BrightSignConfigEntry) -
     listener = await async_acquire_listener(hass)
     tracker = SyncTracker(hass, entry.data[CONF_HOST])
     tracker.async_start()
+    ptp = await async_acquire_ptp_listener(hass)
+    udp_sync = await async_acquire_udp_sync_listener(hass)
+    monitor = async_get_monitor(hass, listener, ptp, udp_sync)
+    entry.async_on_unload(monitor.async_register(entry.data[CONF_HOST], entry.title))
 
     lws = coordinator.data.lws if coordinator.data else None
     udp_port = entry.options.get(CONF_UDP_PORT) or (
@@ -184,7 +199,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: BrightSignConfigEntry) -
     udp_events.async_start()
     entry.async_on_unload(udp_events.async_stop)
 
-    entry.runtime_data = BrightSignRuntimeData(coordinator, tracker, listener, udp_events)
+    entry.runtime_data = BrightSignRuntimeData(
+        coordinator, tracker, listener, udp_events, ptp, udp_sync, monitor
+    )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
@@ -196,4 +213,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: BrightSignConfigEntry) 
     if unloaded:
         entry.runtime_data.sync.async_stop()
         entry.runtime_data.listener.async_stop()
+        entry.runtime_data.ptp.async_stop()
+        entry.runtime_data.udp_sync.async_stop()
     return unloaded

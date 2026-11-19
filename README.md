@@ -31,16 +31,21 @@ presentation was made. The integration detects them per player:
 | **DWS REST API** (`/api/v1`, digest auth) | BrightSignOS 8.x+ with local DWS enabled | OS version, uptime, video mode (read and **change**), HDMI display connected, **connected display** (make/model from EDID), HDMI output on/off, **screenshot camera**, **SD card free/used**, reboot, CEC display on/standby, `brightsign.send_command` |
 | **Presentation Local Web Server** (port 8080/8008) | BrightAuthor presentation with Local Web Server enabled | Autorun version, one **text entity per user variable** (read and change), one button per UDP input event |
 | **UDP messages from the presentation** (receive-only) | Presentation sends UDP (e.g. *Send UDP* command) to Home Assistant | **UDP message** event entity, **Last UDP message** sensor, `brightsign_udp_message` bus event |
-| **Sync multicast** (224.0.126.10:1539, passive) | Player is the leader of a sync group | Sync group running, current sync item, when it started, last item duration (loop length) |
+| **Sync monitoring** (passive: roSyncManager 224.0.126.10:1539, PTP 224.0.1.129:319/320, Ethernet sync scripts UDP 11167) | Player takes part in a sync group | **Sync role** (leader / follower), **sync group**, **PTP domain**, **sync conflict** (two leaders in one group, also as a repair), and on the leader: sync group running, current sync item, when it started, last item duration |
 | **Info page of the Diagnostic Web Server** (read-only fallback) | Older BrightSignOS without the REST API, DWS enabled | Player name, model, serial number, OS version, video mode (resolution), uptime, PoE |
-| **Network reachability** | Always | Online, IP address and serial number sensors |
+| **Network reachability** | Always | Online, IP address, serial number, **unit name** and **host name** (from DHCP) sensors |
 
 The REST API, the presentation's XML API, UDP and sync multicast are documented interfaces.
 For players without the REST API (older BrightSignOS) the integration reads the **Info page** of
 the Diagnostic Web Server as a fallback: read-only, one page, nothing is changed on the player.
 
 Players are named after the name they report (REST API, presentation or Info page), not their
-IP address. Sync entities are only created for players that are a sync **leader**.
+IP address. Sync entities are created as soon as a player shows up in a sync group.
+
+A new presentation is picked up by itself: every 5 minutes the integration looks again for a
+presentation web server (and for the Info page on older players) and adds the entities. If a
+**different player** answers at a player's address (swapped players, a new DHCP address), the
+player is shown offline with a repair message until it is found again.
 
 ## Discovery
 
@@ -58,11 +63,14 @@ Players are found in two ways:
 Can't find a player? Look for MAC addresses starting with `90:AC:3F` in
 **Settings → System → Network → DHCP Browser**, or power-cycle the player.
 
-The **DWS password** (local Diagnostic Web Server, user always `admin`) is **optional**. The
-factory default is the player's serial number. Without it — or when the player has no DWS — the
-player is still added with the basic entities (online, sync, UDP). Add or change the password
-later with **Settings → Devices & services → BrightSign → ⋮ → Reconfigure**. If a stored password
-stops working, Home Assistant asks for the new one (re-authentication).
+The **DWS password** (local Diagnostic Web Server, user always `admin`) is **only asked for when
+needed**. The integration first tries the player without a password and then with its serial
+number, the factory default (taken from the DHCP host name, the presentation, the Info page or
+the HTTPS certificate). Only when that fails you are asked for the password; leave it empty to
+add the player with the basic entities (online, sync, UDP). Add or change the password later
+with **Settings → Devices & services → BrightSign → ⋮ → Reconfigure** (an empty password keeps
+the current one). If a stored password stops working, Home Assistant asks for the new one
+(re-authentication).
 
 ## Installation
 
@@ -112,7 +120,8 @@ Fired for every UDP message from a player, with `device_id`, `host` and `message
 
 [docs/TESTING.md](docs/TESTING.md) has a checklist per feature, how to set up a
 BrightAuthor:connected presentation that sends UDP messages and user variables, and a tiny
-UDP demo presentation (`demo/udp-demo/autorun.brs`) for a spare SD card.
+demo presentation (`demo/ha-demo/autorun.brs`) for a spare SD card that switches on everything
+a presentation can offer.
 
 ## Notes
 
@@ -120,11 +129,20 @@ UDP demo presentation (`demo/udp-demo/autorun.brs`) for a spare SD card.
   off, HDMI off, other values unknown) instead of turning unavailable. Commands to an offline
   player are refused with a clear message.
 - Sync monitoring needs Home Assistant in the **same network segment** (VLAN/subnet) as the
-  players: sync multicast is not routed. With debug logging on, the log shows "Listening for
-  BrightSign sync traffic" and "Receiving BrightSign sync traffic from <address>".
-- Sync entities only fill on the player that is the sync **leader**; followers do not send sync
-  traffic. Encrypted sync traffic (BrightSignOS 8+ default) counts as activity but the item cannot
-  be read.
+  players: multicast and broadcast are not routed. With debug logging on, the log shows the
+  sources it receives ("Receiving BrightSign sync traffic", "Receiving PTP traffic",
+  "Receiving Ethernet sync commands").
+- **Roles**: a player that sends roSyncManager traffic, is the PTP master of its group, or
+  broadcasts Ethernet sync commands is a **leader**. **Followers** are seen through their PTP
+  delay requests; Ethernet sync script clients do not send anything and cannot be seen.
+  Listening to PTP uses UDP ports 319/320; when Home Assistant may not use them (another PTP
+  service, or not running as root) followers are simply not shown.
+- **Sync group**: the roSyncManager domain (or `UDP 11167` for Ethernet sync scripts). The
+  **PTP domain** is shared by the leader and followers of one group. Encrypted sync traffic
+  (BrightSignOS 8+ default) counts as activity but its domain and item cannot be read.
+- **Sync conflict**: when a group has more than one leader for 30 seconds, the leaders get
+  *Sync conflict* on and a repair message lists all leaders, also players that are not in
+  Home Assistant. It clears by itself.
 - "Sync item started" is the time Home Assistant saw the item (re)start. "Last sync item duration"
   is calculated from the player's own timestamps.
 
@@ -154,6 +172,9 @@ What the integration does to protect your players and Home Assistant:
 - **Sync listener**: receive-only. Datagrams above 2 KiB or from non-local addresses are
   ignored, and states are only written when something changes (the heartbeat arrives every
   second).
+- **Sync, PTP and Ethernet sync listeners**: receive-only, nothing is ever sent to these
+  groups. Only local addresses, small datagrams (2 KiB, 512 bytes, 64 bytes), at most 256
+  sources each, and PTP only counts for configured players. States are written on change only.
 - **Network scan**: only when you open **Add integration**, only in Home Assistant's own private
   IPv4 networks (at most 1024 addresses; a larger network is narrowed to the /24 Home Assistant
   is in). Each address gets one TCP connection attempt on port 80 that is closed right away;
@@ -168,9 +189,9 @@ automated checks back the **Local only** badge:
 - `scripts/check_local_only.py` (the badge's workflow) reads the manifest and the code: local
   IoT class, no cloud or webhook, no extra Python packages, no hard-coded internet addresses,
   connections and UDP sends only from `api.py`. Exceptions are allowed explicitly and
-  checked: the receive-only listeners in `sync.py` (sync multicast) and `udp_events.py`
-  (UDP messages from configured players), which may not send anything, and the sync group
-  address `224.0.126.10`.
+  checked: the receive-only listeners in `sync.py` (sync multicast and Ethernet sync
+  broadcasts), `ptp.py` (PTP) and `udp_events.py` (UDP messages from configured players),
+  which may not send anything, and the multicast addresses `224.0.126.10` and `224.0.1.129`.
 - The tests record every HTTP request, TCP connection and UDP datagram during probing,
   polling and commands and check that all of them go to the configured player; they also check
   that the action refuses public addresses and that the sync listener ignores outside traffic.
@@ -186,7 +207,7 @@ analytics) is up to your Home Assistant settings.
 | --- | --- |
 | Player | Local DWS on with a strong password (BrightSignOS 9 turns it off by default), or off if you do not need REST features. Local Web Server only when the presentation needs it. |
 | Network | Players in an AV/IoT VLAN with fixed addresses (DHCP reservation). No port forwarding. |
-| Firewall: allow | Home Assistant → players TCP 443/80 (DWS) and 8080/8008 (Local Web Server), UDP to the presentation's receiver port (default 5000). Players → Home Assistant UDP to the configured message port (default 5000) and UDP 1539 multicast `224.0.126.10` (sync monitoring). |
+| Firewall: allow | Home Assistant → players TCP 443/80 (DWS) and 8080/8008 (Local Web Server), UDP to the presentation's receiver port (default 5000). Players → Home Assistant UDP to the configured message port (default 5000); for sync monitoring UDP 1539 multicast `224.0.126.10`, UDP 319/320 multicast `224.0.1.129` (PTP) and UDP 11167 broadcast (Ethernet sync scripts). |
 | Firewall: block | Players → the rest of the LAN and the internet, except DNS/NTP (and BrightSign cloud if you use it). |
 
 See [SECURITY.md](SECURITY.md) to report a vulnerability and [CONTRIBUTING.md](CONTRIBUTING.md)

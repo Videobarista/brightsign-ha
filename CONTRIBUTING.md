@@ -36,7 +36,8 @@ results and pull requests are all welcome.
   is the Info page of the Diagnostic Web Server, as a read-only fallback for
   players without the REST API; no other pages, and nothing is ever submitted.
 - **Local only**: the integration talks to the configured players only.
-  Network code stays in `api.py` (the receive-only sync listener in `sync.py`),
+  Network code stays in `api.py` (the receive-only listeners in `sync.py`, `ptp.py` and
+  `udp_events.py`),
   there are no hard-coded addresses, and `python3 scripts/check_local_only.py`
   must pass.
 - **Untrusted input**: treat everything a player sends as untrusted, never log

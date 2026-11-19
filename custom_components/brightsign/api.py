@@ -31,6 +31,8 @@ from typing import Any
 import xml.etree.ElementTree as ET
 
 import aiohttp
+from cryptography import x509
+from cryptography.x509.oid import NameOID
 
 from .const import DEFAULT_UDP_PORT, DWS_USERNAME, LWS_PORT, REQUEST_TIMEOUT
 
@@ -82,6 +84,8 @@ class ProbeResult:
     firmware: str | None = None
     fingerprint: str | None = None
     legacy: bool | None = False  # None: unknown (player did not answer), detect later
+    # Serial-like names from the HTTPS certificate: tried as the default password
+    certificate_serials: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -122,6 +126,39 @@ def is_local_address(host: str) -> bool:
     return (
         address.is_private or address.is_link_local or address.is_loopback or address.is_multicast
     )
+
+
+_SERIAL_LIKE = re.compile(r"(?=[A-Z0-9]*[0-9])[A-Z0-9]{8,16}")  # serials contain digits
+
+
+def serial_from_name(name: str) -> str | None:
+    """Serial number in a host or certificate name ("brightsign-<serial>[.domain]")."""
+    label = str(name).strip().split(".")[0]
+    if label.lower().startswith("brightsign-"):
+        label = label[len("brightsign-") :]
+    label = label.upper()
+    return label if _SERIAL_LIKE.fullmatch(label) else None
+
+
+def certificate_serials(der: bytes) -> list[str]:
+    """Serial-like names (common name, DNS names) of a DER certificate; at most two."""
+    try:
+        cert = x509.load_der_x509_certificate(der)
+    except ValueError:
+        return []
+    names = [str(attr.value) for attr in cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)]
+    try:
+        alt = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+    except x509.ExtensionNotFound:
+        pass  # no alternative names in this certificate
+    else:
+        names += alt.value.get_values_for_type(x509.DNSName)
+    serials: list[str] = []
+    for name in names:
+        serial = serial_from_name(name)
+        if serial and serial not in serials:
+            serials.append(serial)
+    return serials[:2]
 
 
 # ---------------------------------------------------------------------------
@@ -634,8 +671,8 @@ class BrightSignClient:
             return {}
         return parse_legacy_info(body.decode("utf-8", errors="replace"))
 
-    async def async_fetch_fingerprint(self) -> str | None:
-        """SHA-256 fingerprint of the player's HTTPS certificate (for pinning)."""
+    async def async_fetch_certificate(self) -> bytes | None:
+        """The player's (self-signed) HTTPS certificate, DER encoded."""
         if self._no_verify_context is None:
             return None
         try:
@@ -647,10 +684,22 @@ class BrightSignClient:
             return None
         try:
             ssl_object = writer.get_extra_info("ssl_object")
-            der = ssl_object.getpeercert(binary_form=True) if ssl_object else None
+            return ssl_object.getpeercert(binary_form=True) if ssl_object else None
         finally:
             writer.close()
+
+    async def async_fetch_fingerprint(self) -> str | None:
+        """SHA-256 fingerprint of the player's HTTPS certificate (for pinning)."""
+        der = await self.async_fetch_certificate()
         return hashlib.sha256(der).hexdigest() if der else None
+
+    async def async_get_unit_name(self) -> str | None:
+        """Unit name set on the player (registry networking/un), if any."""
+        data = await self._rest("GET", "/api/v1/registry/networking/un/")
+        value = find_key(data, "value")
+        if not isinstance(value, str):
+            return None
+        return sanitize_text(value) or None
 
     # ----- Local Web Server (presentation) ---------------------------------
 
@@ -760,8 +809,12 @@ class BrightSignClient:
                 result.model = legacy.get("model")
                 result.firmware = legacy.get("firmware")
                 result.name = legacy.get("name")
-        if result.rest_scheme == "https" and not result.auth_failed:
-            result.fingerprint = await self.async_fetch_fingerprint()
+        if result.rest_scheme == "https":
+            der = await self.async_fetch_certificate()
+            if der:
+                result.certificate_serials = certificate_serials(der)
+                if not result.auth_failed:
+                    result.fingerprint = hashlib.sha256(der).hexdigest()
         self.rest_scheme = None if result.auth_failed else result.rest_scheme
         self.fingerprint = result.fingerprint
 
@@ -778,6 +831,18 @@ class BrightSignClient:
 
         if not result.reachable:
             result.reachable = await self.async_reachable()
+        _LOGGER.debug(
+            "Probe of %s: reachable=%s, REST=%s, password needed=%s, Info page=%s, "
+            "web server=%s, serial known=%s, certificate names=%d",
+            self.host,
+            result.reachable,
+            result.rest_scheme,
+            result.auth_failed,
+            result.legacy,
+            result.lws,
+            bool(result.serial),
+            len(result.certificate_serials),
+        )
         return result
 
 

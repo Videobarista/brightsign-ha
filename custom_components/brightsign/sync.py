@@ -1,10 +1,11 @@
 """Passive listener for BrightSign synchronization (roSyncManager) traffic.
 
 A sync leader multicasts small JSON messages to 224.0.126.10:1539, e.g.
-``{"d": "1", "p": "1\\n1\\n20261118T155417.834393", "v": 1}`` (current sync item and the
-player time it started) and ``{"d": "vsync:1", ...}`` (heartbeat). Messages are only
-received; nothing is ever sent to the group. Encrypted sync traffic is counted as
-activity but not decoded.
+``{"d": "1", "p": "1\\n1\\n20261118T155417.834393", "v": 1}`` (sync domain "1", the sync
+item and the player time it started) and ``{"d": "vsync:1", ...}`` (heartbeat of domain
+"1"). The domain identifies the sync group. Messages are only received; nothing is ever
+sent to the group. Encrypted sync traffic (BrightSignOS 8+) is counted as activity but not
+decoded.
 
 Hardening: datagrams above 2 KiB and datagrams from non-local addresses are ignored,
 text is bounded, and entity states are only written when something changes (the
@@ -18,6 +19,7 @@ from collections.abc import Callable
 from datetime import datetime
 import json
 import logging
+import re
 import socket
 import struct
 import time
@@ -27,10 +29,49 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dis
 from homeassistant.util import dt as dt_util
 
 from .api import is_local_address, sanitize_text
-from .const import DOMAIN, MAX_SYNC_DATAGRAM, SIGNAL_SYNC, SYNC_GROUP, SYNC_PORT, SYNC_TIMEOUT
+from .const import (
+    DOMAIN,
+    MAX_SYNC_DATAGRAM,
+    MAX_UDP_SYNC_DATAGRAM,
+    SIGNAL_SYNC,
+    SYNC_GROUP,
+    SYNC_PORT,
+    SYNC_TIMEOUT,
+    UDP_SYNC_PORT,
+)
 
 _LOGGER = logging.getLogger(__name__)
 _SHARED_KEY = f"{DOMAIN}_sync_listener"
+_UDP_SYNC_KEY = f"{DOMAIN}_udp_sync_listener"
+# A sync command: three lower case letters, optionally followed by a parameter
+_UDP_SYNC_COMMAND = re.compile(r"[a-z]{3}(?:[^a-z][\x20-\x7e]*)?")
+
+
+def open_multicast_socket(group: str, port: int) -> socket.socket:
+    """Non-blocking UDP socket that receives the given multicast group (receive-only)."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if hasattr(socket, "SO_REUSEPORT"):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        sock.bind(("", port))
+        mreq = struct.pack("=4sl", socket.inet_aton(group), socket.INADDR_ANY)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        sock.setblocking(False)
+    except OSError:
+        sock.close()
+        raise
+    return sock
+
+
+def sync_domain(message: dict | None) -> str | None:
+    """Sync group (roSyncManager domain) of a decoded message; None when unknown."""
+    if not message:
+        return None
+    domain = sanitize_text(message.get("d", ""), 64)
+    if domain.startswith("vsync:"):
+        domain = domain[len("vsync:") :]
+    return domain or None
 
 
 def decode_sync_message(data: bytes) -> dict | None:
@@ -45,17 +86,27 @@ def decode_sync_message(data: bytes) -> dict | None:
 class _SyncProtocol(asyncio.DatagramProtocol):
     """Receive-only protocol for the sync multicast group."""
 
-    def __init__(self, hass: HomeAssistant) -> None:
+    def __init__(
+        self, hass: HomeAssistant, sources: dict[str, tuple[float, str | None]] | None = None
+    ) -> None:
         self._hass = hass
-        self._sources: set[str] = set()
+        # Every sync leader on the network: address -> (last seen, sync domain)
+        self._sources = sources if sources is not None else {}
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         if len(data) > MAX_SYNC_DATAGRAM or not is_local_address(addr[0]):
             return
-        if addr[0] not in self._sources and len(self._sources) < 256:
-            self._sources.add(addr[0])
-            _LOGGER.debug("Receiving BrightSign sync traffic from %s", addr[0])
-        async_dispatcher_send(self._hass, SIGNAL_SYNC.format(addr[0]), decode_sync_message(data))
+        message = decode_sync_message(data)
+        if addr[0] not in self._sources:
+            if len(self._sources) >= 256:
+                return
+            _LOGGER.debug(
+                "Receiving BrightSign sync traffic from %s (domain %s)",
+                addr[0],
+                sync_domain(message) or "unknown",
+            )
+        self._sources[addr[0]] = (time.monotonic(), sync_domain(message))
+        async_dispatcher_send(self._hass, SIGNAL_SYNC.format(addr[0]), message)
 
 
 class SyncListener:
@@ -65,6 +116,7 @@ class SyncListener:
         self._hass = hass
         self._transport: asyncio.BaseTransport | None = None
         self._users = 0
+        self.sources: dict[str, tuple[float, str | None]] = {}
 
     async def async_start(self) -> None:
         """Join the sync multicast group (once, shared by all entries)."""
@@ -72,21 +124,14 @@ class SyncListener:
         if self._transport is not None:
             return
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            if hasattr(socket, "SO_REUSEPORT"):
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-            sock.bind(("", SYNC_PORT))
-            mreq = struct.pack("=4sl", socket.inet_aton(SYNC_GROUP), socket.INADDR_ANY)
-            sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-            sock.setblocking(False)
+            sock = open_multicast_socket(SYNC_GROUP, SYNC_PORT)
         except OSError as err:
             _LOGGER.warning(
                 "Cannot listen for BrightSign sync traffic on %s:%s: %s", SYNC_GROUP, SYNC_PORT, err
             )
             return
         self._transport, _ = await self._hass.loop.create_datagram_endpoint(
-            lambda: _SyncProtocol(self._hass), sock=sock
+            lambda: _SyncProtocol(self._hass, self.sources), sock=sock
         )
         _LOGGER.debug("Listening for BrightSign sync traffic on %s:%s", SYNC_GROUP, SYNC_PORT)
 
@@ -121,6 +166,73 @@ def player_time(payload: str) -> datetime | None:
     return None
 
 
+class _UdpSyncProtocol(asyncio.DatagramProtocol):
+    """Receive-only: masters of Ethernet sync scripts broadcasting their commands."""
+
+    def __init__(self, sources: dict[str, float]) -> None:
+        self._sources = sources
+
+    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+        if len(data) > MAX_UDP_SYNC_DATAGRAM or not is_local_address(addr[0]):
+            return
+        text = data.decode("ascii", errors="replace").strip()
+        if not _UDP_SYNC_COMMAND.fullmatch(text):
+            return
+        if addr[0] not in self._sources:
+            if len(self._sources) >= 256:
+                return
+            _LOGGER.debug("Receiving Ethernet sync commands from %s", addr[0])
+        self._sources[addr[0]] = time.monotonic()
+
+
+class UdpSyncListener:
+    """One shared listener for the broadcasts of Ethernet sync scripts (UDP 11167)."""
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self._hass = hass
+        self._transport: asyncio.BaseTransport | None = None
+        self._users = 0
+        self.sources: dict[str, float] = {}  # master address -> last seen
+
+    async def async_start(self) -> None:
+        """Listen (once, shared by all entries)."""
+        self._users += 1
+        if self._transport is not None:
+            return
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if hasattr(socket, "SO_REUSEPORT"):
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            sock.bind(("", UDP_SYNC_PORT))
+            sock.setblocking(False)
+        except OSError as err:
+            sock.close()
+            _LOGGER.debug("Cannot listen for Ethernet sync commands on %s: %s", UDP_SYNC_PORT, err)
+            return
+        self._transport, _ = await self._hass.loop.create_datagram_endpoint(
+            lambda: _UdpSyncProtocol(self.sources), sock=sock
+        )
+
+    @callback
+    def async_stop(self) -> None:
+        """Stop when the last entry unloads."""
+        self._users = max(0, self._users - 1)
+        if self._users == 0 and self._transport is not None:
+            self._transport.close()
+            self._transport = None
+
+
+async def async_acquire_udp_sync_listener(hass: HomeAssistant) -> UdpSyncListener:
+    """Start (or reuse) the shared Ethernet sync listener."""
+    listener: UdpSyncListener | None = hass.data.get(_UDP_SYNC_KEY)
+    if listener is None:
+        listener = UdpSyncListener(hass)
+        hass.data[_UDP_SYNC_KEY] = listener
+    await listener.async_start()
+    return listener
+
+
 class SyncTracker:
     """Sync state for one player IP (filled only when that player is a sync leader)."""
 
@@ -134,6 +246,7 @@ class SyncTracker:
         self._last_key: tuple[str, str] | None = None
         self._last_player_time: datetime | None = None
         self.item: str | None = None
+        self.domain: str | None = None
         self.item_started: datetime | None = None
         self.last_item_duration: float | None = None
         self.encrypted = False
@@ -181,7 +294,7 @@ class SyncTracker:
         return remove
 
     def _snapshot(self) -> tuple:
-        return (self.item, self.item_started, self.last_item_duration, self.encrypted)
+        return (self.item, self.domain, self.item_started, self.last_item_duration, self.encrypted)
 
     @callback
     def async_handle(self, message: dict | None) -> None:
@@ -193,11 +306,15 @@ class SyncTracker:
         if message is None:
             self.encrypted = True
         else:
-            item = sanitize_text(message.get("d", ""))
-            if item and not item.startswith("vsync"):
+            self.domain = sync_domain(message) or self.domain
+            raw = sanitize_text(message.get("d", ""), 64)
+            if raw and not raw.startswith("vsync"):
                 payload = str(message.get("p", ""))[:256]
                 lines = payload.strip().splitlines()
-                key = (item, lines[-1][:32] if lines else "")
+                # The sync item is the line before the player time stamp
+                names = lines[:-1] if len(lines) > 1 and player_time(payload) else lines
+                item = sanitize_text(names[-1]) if names else raw
+                key = (raw, lines[-1][:32] if lines else "")
                 if key != self._last_key:
                     stamp = player_time(payload)
                     if self._last_key is not None:

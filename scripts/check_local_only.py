@@ -43,14 +43,14 @@ SESSION_FILES = {"__init__.py", "config_flow.py"}
 CLIENT_NAMES = {"client"}
 # Python requirements that are allowed (the device's own protocol library).
 ALLOWED_REQUIREMENTS: set[str] = set()
-# Literal addresses that are allowed in the code: the BrightSign sync multicast
-# group (local network only) and the local broadcast address.
-ALLOWED_ADDRESSES: set[str] = {"224.0.126.10", "255.255.255.255"}
+# Literal addresses that are allowed in the code: the BrightSign sync multicast group,
+# the PTP multicast group (both local network only) and the local broadcast address.
+ALLOWED_ADDRESSES: set[str] = {"224.0.126.10", "224.0.1.129", "255.255.255.255"}
 # Files that may use the socket module, and for what.
-SOCKET_FILES = {"api.py", "sync.py", "udp_events.py"}
-# The only files that may listen, receive-only: BrightSign sync multicast and UDP
+SOCKET_FILES = {"api.py", "sync.py", "udp_events.py", "ptp.py"}
+# The only files that may listen, receive-only: BrightSign sync and PTP multicast, and UDP
 # messages from configured players.
-SYNC_LISTENER_FILES = {"sync.py", "udp_events.py"}
+SYNC_LISTENER_FILES = {"sync.py", "udp_events.py", "ptp.py"}
 # Files that may send UDP datagrams (commands to the configured player only).
 UDP_SEND_FILES = {"api.py"}
 

@@ -1,4 +1,9 @@
-"""Config flow for BrightSign players."""
+"""Config flow for BrightSign players.
+
+The DWS password is only asked for when it is needed: the integration first tries the
+player without a password and then with its serial number (the factory default password,
+from the DHCP host name, the presentation, the Info page or the HTTPS certificate).
+"""
 
 from __future__ import annotations
 
@@ -32,11 +37,12 @@ from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from homeassistant.util.ssl import get_default_no_verify_context
 
-from .api import BrightSignClient, ProbeResult, async_scan_for_players, scan_targets
+from .api import BrightSignClient, ProbeResult, async_scan_for_players, sanitize_text, scan_targets
 from .const import (
     CONF_FINGERPRINT,
     CONF_HAS_LEGACY,
     CONF_HAS_LWS,
+    CONF_HOSTNAME,
     CONF_MAC,
     CONF_REST_SCHEME,
     CONF_SERIAL,
@@ -78,9 +84,14 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         self._host: str | None = None
         self._mac: str | None = None
+        self._hostname: str | None = None
         self._serial: str | None = None
         self._name: str | None = None
         self._found: dict[str, str] = {}  # players found by the network scan: IP -> MAC
+        self._probe: ProbeResult | None = None  # last automatic probe
+        self._password = DEFAULT_PASSWORD  # password the automatic probe found
+
+    # ----- helpers -----------------------------------------------------------
 
     async def _async_scan(self) -> dict[str, str]:
         """BrightSign players on Home Assistant's own local networks: IP -> MAC."""
@@ -121,6 +132,38 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
         )
         return await client.async_probe()
 
+    def _candidates(self, result: ProbeResult, hint: str | None, extra: list[str]) -> list[str]:
+        """Passwords to try: the stored one (reconfigure), then the serial number."""
+        candidates: list[str] = [password for password in extra if password]
+        for serial in (hint, self._serial, result.serial, *result.certificate_serials):
+            for candidate in (serial.upper(), serial) if serial else ():
+                if candidate not in candidates:
+                    candidates.append(candidate)
+        return candidates[:5]
+
+    async def _async_auto(
+        self, host: str, hint: str | None = None, extra: list[str] | None = None
+    ) -> ProbeResult:
+        """Probe without a password, then with the stored password and the serial number."""
+        self._password = DEFAULT_PASSWORD
+        result = await self._async_probe(host, DEFAULT_PASSWORD)
+        if result.reachable and result.auth_failed:
+            for candidate in self._candidates(result, hint, extra or []):
+                retry = await self._async_probe(host, candidate)
+                if retry.reachable and not retry.auth_failed:
+                    _LOGGER.debug("%s accepted a default or stored DWS password", host)
+                    self._password = candidate
+                    return retry
+        return result
+
+    @staticmethod
+    def _basic(result: ProbeResult) -> ProbeResult:
+        """No password: use the player without the DWS (add the password later)."""
+        result.rest_scheme = None
+        result.fingerprint = None
+        result.legacy = False
+        return result
+
     def _entry_data(self, host: str, password: str, result: ProbeResult) -> dict[str, Any]:
         return {
             CONF_HOST: host,
@@ -131,6 +174,7 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_FINGERPRINT: result.fingerprint,
             CONF_SERIAL: result.serial or self._serial,
             CONF_MAC: self._mac,
+            CONF_HOSTNAME: self._hostname,
         }
 
     def _title(self, host: str, result: ProbeResult) -> str:
@@ -144,39 +188,51 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
             return f"BrightSign {result.model or serial}"
         return "BrightSign player"
 
-    def _serial_candidates(self, result: ProbeResult, hint: str | None) -> list[str]:
-        """Serial numbers to try as the factory default DWS password (upper case first)."""
-        candidates: list[str] = []
-        for serial in (hint, self._serial, result.serial):
-            for candidate in (serial.upper(), serial) if serial else ():
-                if candidate not in candidates:
-                    candidates.append(candidate)
-        return candidates[:4]
+    async def _async_create(
+        self, host: str, password: str, result: ProbeResult
+    ) -> ConfigFlowResult:
+        """Create the entry; the serial number is the unique ID when it is known."""
+        if result.serial:
+            await self.async_set_unique_id(result.serial, raise_on_progress=False)
+            self._abort_if_unique_id_configured(updates={CONF_HOST: host})
+        elif self.unique_id is None:
+            await self.async_set_unique_id(
+                self._serial or self._mac or host, raise_on_progress=False
+            )
+            self._abort_if_unique_id_configured(updates={CONF_HOST: host})
+        return self.async_create_entry(
+            title=self._title(host, result), data=self._entry_data(host, password, result)
+        )
 
     async def _async_validate(
-        self, host: str, password: str, errors: dict[str, str], serial_hint: str | None = None
+        self,
+        host: str,
+        password: str,
+        errors: dict[str, str],
+        serial_hint: str | None = None,
+        stored: str | None = None,
     ) -> tuple[ProbeResult, str] | None:
-        """Probe the player; returns the result and the password that works."""
-        result = await self._async_probe(host, password)
+        """Check a host with the given password, or automatically when it is empty."""
+        if password:
+            result = await self._async_probe(host, password)
+        else:
+            result = await self._async_auto(host, serial_hint, [stored] if stored else None)
+            password = self._password
         if not result.reachable:
             errors["base"] = "cannot_connect"
             return None
-        if result.auth_failed and not password:
-            for candidate in self._serial_candidates(result, serial_hint):
-                retry = await self._async_probe(host, candidate)
-                if retry.reachable and not retry.auth_failed:
-                    _LOGGER.debug("%s accepted its serial number as DWS password", host)
-                    return retry, candidate
         if result.auth_failed:
             if password:
                 errors[CONF_PASSWORD] = "invalid_auth"
                 return None
-            # No password given: add the player without the DWS REST API (basic entities).
-            # The password can be added later with Reconfigure.
-            result.rest_scheme = None
-            result.fingerprint = None
-            result.legacy = False
+            result = self._basic(result)
         return result, password
+
+    def _display_name(self) -> str:
+        result = self._probe or ProbeResult()
+        if self._name or result.name or result.serial or self._serial or result.model:
+            return self._title(self._host or "", result)
+        return self._host or "BrightSign"
 
     # ----- manual ----------------------------------------------------------
 
@@ -188,16 +244,16 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
         else:
             host = user_input[CONF_HOST].strip()
             self._mac = self._found.get(host)
-            password = user_input.get(CONF_PASSWORD, DEFAULT_PASSWORD)
             self._async_abort_entries_match({CONF_HOST: host})
-            validated = await self._async_validate(host, password, errors)
-            if validated is not None:
-                result, password = validated
-                await self.async_set_unique_id(result.serial or host)
-                self._abort_if_unique_id_configured(updates={CONF_HOST: host})
-                return self.async_create_entry(
-                    title=self._title(host, result), data=self._entry_data(host, password, result)
-                )
+            self._host = host
+            result = await self._async_auto(host)
+            self._probe = result
+            if not result.reachable:
+                errors["base"] = "cannot_connect"
+            elif result.auth_failed:
+                return await self.async_step_password()
+            else:
+                return await self._async_create(host, self._password, result)
         found = {ip: mac for ip, mac in self._found.items() if not self._is_configured(ip, mac)}
         host_selector: SelectSelector | TextSelector = TextSelector()
         if found:
@@ -214,15 +270,36 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user",
             data_schema=self.add_suggested_values_to_schema(
-                vol.Schema(
-                    {
-                        vol.Required(CONF_HOST): host_selector,
-                        vol.Optional(CONF_PASSWORD, default=DEFAULT_PASSWORD): str,
-                    }
-                ),
+                vol.Schema({vol.Required(CONF_HOST): host_selector}),
                 user_input or ({CONF_HOST: next(iter(found))} if found else None),
             ),
             description_placeholders={"found": str(len(found))},
+            errors=errors,
+        )
+
+    async def async_step_password(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """The serial number was not accepted: enter the DWS password, or go on without."""
+        errors: dict[str, str] = {}
+        host = self._host or ""
+        if user_input is not None:
+            password = user_input.get(CONF_PASSWORD, DEFAULT_PASSWORD)
+            if not password:
+                return await self._async_create(
+                    host, DEFAULT_PASSWORD, self._basic(self._probe or ProbeResult(reachable=True))
+                )
+            result = await self._async_probe(host, password)
+            if not result.reachable:
+                errors["base"] = "cannot_connect"
+            elif result.auth_failed:
+                errors[CONF_PASSWORD] = "invalid_auth"
+            else:
+                return await self._async_create(host, password, result)
+        return self.async_show_form(
+            step_id="password",
+            data_schema=PASSWORD_SCHEMA,
+            description_placeholders={"name": self._display_name(), "host": host},
             errors=errors,
         )
 
@@ -232,13 +309,17 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
         """Player found by its BrightSign MAC address or hostname, or a known player's address."""
         self._host = host = discovery_info.ip
         self._mac = mac = format_mac(discovery_info.macaddress)
+        self._hostname = sanitize_text(discovery_info.hostname, 63) or None
         self._serial = serial_from_hostname(discovery_info.hostname)
         if entry := self._async_known_entry(mac, self._serial):
             # Known player, maybe at a new address. Aborting through the unique ID also
             # records this discovery, so Home Assistant offers the player again after it
             # has been removed.
+            updates: dict[str, Any] = {CONF_HOST: host, CONF_MAC: mac}
+            if self._hostname:
+                updates[CONF_HOSTNAME] = self._hostname
             await self.async_set_unique_id(entry.unique_id, raise_on_progress=False)
-            self._abort_if_unique_id_configured(updates={CONF_HOST: host, CONF_MAC: mac})
+            self._abort_if_unique_id_configured(updates=updates)
         self._async_abort_entries_match({CONF_HOST: host})
         await self.async_set_unique_id(self._serial or mac)
         self._abort_if_unique_id_configured(updates={CONF_HOST: host})
@@ -258,30 +339,32 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
         return await self._async_discovered()
 
     async def _async_discovered(self) -> ConfigFlowResult:
-        self.context["title_placeholders"] = {"name": self._name or self._host or "BrightSign"}
+        """Try the player right away: the password is only asked when it is needed."""
+        self._probe = await self._async_auto(self._host or "", self._serial)
+        self.context["title_placeholders"] = {"name": self._display_name()}
+        if self._probe.reachable and self._probe.auth_failed:
+            return await self.async_step_password()
         return await self.async_step_discovery_confirm()
 
     async def async_step_discovery_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Confirm a discovered player and enter the DWS password if it has one."""
+        """Confirm a discovered player."""
         errors: dict[str, str] = {}
         host = self._host or ""
         if user_input is not None:
-            password = user_input.get(CONF_PASSWORD, DEFAULT_PASSWORD)
-            validated = await self._async_validate(host, password, errors)
-            if validated is not None:
-                result, password = validated
-                if result.serial and result.serial != self.unique_id:
-                    await self.async_set_unique_id(result.serial, raise_on_progress=False)
-                    self._abort_if_unique_id_configured(updates={CONF_HOST: host})
-                return self.async_create_entry(
-                    title=self._title(host, result), data=self._entry_data(host, password, result)
-                )
+            result = self._probe
+            if result is None or not result.reachable:
+                # The player did not answer when it was discovered: try again now
+                result = self._probe = await self._async_auto(host, self._serial)
+            if result.reachable and result.auth_failed:
+                return await self.async_step_password()
+            if result.reachable:
+                return await self._async_create(host, self._password, result)
+            errors["base"] = "cannot_connect"
         return self.async_show_form(
             step_id="discovery_confirm",
-            data_schema=PASSWORD_SCHEMA,
-            description_placeholders={"host": host},
+            description_placeholders={"name": self._display_name(), "host": host},
             errors=errors,
         )
 
@@ -290,14 +373,18 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Change the address or add/change the DWS password of a configured player."""
+        """Change the address or the DWS password; an empty password keeps the current one."""
         entry = self._get_reconfigure_entry()
         errors: dict[str, str] = {}
         if user_input is not None:
             host = user_input[CONF_HOST].strip()
             password = user_input.get(CONF_PASSWORD, DEFAULT_PASSWORD)
             validated = await self._async_validate(
-                host, password, errors, entry.data.get(CONF_SERIAL)
+                host,
+                password,
+                errors,
+                entry.data.get(CONF_SERIAL),
+                entry.data.get(CONF_PASSWORD),
             )
             if validated is not None:
                 result, password = validated

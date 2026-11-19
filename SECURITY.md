@@ -6,8 +6,8 @@ Only the latest release of this integration receives fixes.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.4.x   | Yes       |
-| < 0.4   | No        |
+| 0.5.x   | Yes       |
+| < 0.5   | No        |
 
 ## Reporting a vulnerability
 

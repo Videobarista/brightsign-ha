@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import random
 from unittest.mock import MagicMock
 
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
+
 from custom_components.brightsign.api import (
     MAX_ITEMS,
     build_digest_header,
+    certificate_serials,
     find_key,
     is_local_address,
     is_valid_udp_message,
@@ -20,10 +27,17 @@ from custom_components.brightsign.api import (
     parse_video_modes,
     parse_xml,
     sanitize_text,
+    serial_from_name,
     unwrap,
     xml_fields,
 )
-from custom_components.brightsign.sync import SyncTracker, decode_sync_message, player_time
+from custom_components.brightsign.ptp import parse_ptp_header
+from custom_components.brightsign.sync import (
+    SyncTracker,
+    decode_sync_message,
+    player_time,
+    sync_domain,
+)
 from homeassistant.core import HomeAssistant
 
 
@@ -106,8 +120,48 @@ async def test_sync_heartbeat_does_not_write_states(hass: HomeAssistant) -> None
     assert update.call_count == 2
     assert tracker.last_item_duration == 900.6
     assert tracker.item_started is not None
+    assert tracker.domain == "1"
+    assert tracker.item == "1"
     tracker.async_handle(None)
     assert tracker.encrypted
+
+
+def test_sync_domain() -> None:
+    assert sync_domain({"d": "vsync:1"}) == "1"
+    assert sync_domain({"d": "BS1", "p": "x"}) == "BS1"
+    assert sync_domain({"p": "x"}) is None
+    assert sync_domain(None) is None
+
+
+def test_serial_from_name() -> None:
+    assert serial_from_name("brightsign-abc12345.lan") == "ABC12345"
+    assert serial_from_name("UJE2TEST0001") == "UJE2TEST0001"
+    assert serial_from_name("localhost") is None  # no digits: not a serial number
+    assert serial_from_name("brightsign-x") is None
+
+
+def test_certificate_serials() -> None:
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "brightsign-uje2test0001")])
+    now = datetime.datetime.now(datetime.UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(1)
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [x509.DNSName("UJE2TEST0001.local"), x509.DNSName("player.lan")]
+            ),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    assert certificate_serials(cert.public_bytes(serialization.Encoding.DER)) == ["UJE2TEST0001"]
+    assert certificate_serials(b"not a certificate") == []
 
 
 def test_player_time() -> None:
@@ -151,6 +205,9 @@ async def test_fuzz_parsers_never_crash(hass: HomeAssistant) -> None:
         parse_uptime(text)
         parse_edid(text)
         parse_video_modes(data if isinstance(data, list) else [text])
+        certificate_serials(text.encode())
+        parse_ptp_header(text.encode())
+        sync_domain(data if isinstance(data, dict) else None)
 
 
 LEGACY_PAGE = """<html><head><title>BrightSign&reg;</title></head><body>

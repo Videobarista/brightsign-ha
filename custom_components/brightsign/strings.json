@@ -4,36 +4,28 @@
     "step": {
       "user": {
         "title": "Add a BrightSign player",
-        "description": "Pick a BrightSign player found on the network ({found} found), or enter its IP address. The DWS password is optional.",
+        "description": "Pick a BrightSign player found on the network ({found} found), or enter its IP address. A DWS password is only asked for when the player needs one and its serial number (the factory default) is not accepted.",
         "data": {
-          "host": "Host",
-          "password": "DWS password (optional)"
+          "host": "Host"
         },
         "data_description": {
-          "host": "Players found on the network are listed (IP address and MAC address). You can also type an IP address or hostname.",
-          "password": "Optional. Leave empty if the player has no password or you don't know it: the player is then added with basic entities (online, sync) and you can add the password later with Reconfigure. The user is always \"admin\"; the factory default password is the player's serial number. Left empty, the integration first tries the player's serial number (the factory default password) automatically."
+          "host": "Players found on the network are listed (IP address and MAC address). You can also type an IP address or hostname."
         }
       },
       "discovery_confirm": {
         "title": "BrightSign player found",
-        "description": "A BrightSign player was found at {host}. The DWS password is optional: leave it empty to add the player with basic entities.",
-        "data": {
-          "password": "DWS password (optional)"
-        },
-        "data_description": {
-          "password": "Optional. Leave empty if the player has no password or you don't know it: the player is then added with basic entities (online, sync) and you can add the password later with Reconfigure. Left empty, the integration first tries the player's serial number (the factory default password) automatically."
-        }
+        "description": "Add {name} ({host})?"
       },
       "reconfigure": {
         "title": "Reconfigure BrightSign player",
-        "description": "Change the address, or add or change the DWS password to unlock model, uptime, HDMI status, reboot and CEC control.",
+        "description": "Change the address, or the DWS password. Leave the password empty to keep the current one (or, when there is none, to try the serial number).",
         "data": {
           "host": "Host",
           "password": "DWS password (optional)"
         },
         "data_description": {
           "host": "IP address or hostname of the BrightSign player.",
-          "password": "Leave empty to use the player without the DWS REST API. Left empty, the integration first tries the player's serial number (the factory default password) automatically."
+          "password": "Leave empty to keep the current password. If that does not work either, the serial number (the factory default) is tried, and otherwise the player is used without the DWS."
         }
       },
       "reauth_confirm": {
@@ -41,6 +33,16 @@
         "description": "The BrightSign player at {host} rejected the stored DWS password, or its HTTPS certificate changed (firmware update or factory reset). Enter the password to continue; the current certificate is then trusted. Leave it empty to continue with basic entities only.",
         "data": {
           "password": "DWS password (optional)"
+        }
+      },
+      "password": {
+        "title": "DWS password",
+        "description": "{name} ({host}) asks for a DWS password, and its serial number (the factory default password) was not accepted. Enter the password, or leave it empty to add the player without the DWS (basic entities). You can add the password later with Reconfigure.",
+        "data": {
+          "password": "DWS password (optional)"
+        },
+        "data_description": {
+          "password": "The user is always \"admin\". Leave empty to add the player with basic entities (online, sync, UDP messages)."
         }
       }
     },
@@ -64,6 +66,14 @@
       },
       "sync_active": {
         "name": "Sync group running"
+      },
+      "sync_conflict": {
+        "name": "Sync conflict",
+        "state_attributes": {
+          "other_leaders": {
+            "name": "Other leaders"
+          }
+        }
       }
     },
     "button": {
@@ -119,6 +129,26 @@
       },
       "last_udp_message": {
         "name": "Last UDP message"
+      },
+      "sync_role": {
+        "name": "Sync role",
+        "state": {
+          "leader": "Leader",
+          "follower": "Follower",
+          "none": "None"
+        }
+      },
+      "sync_group": {
+        "name": "Sync group"
+      },
+      "ptp_domain": {
+        "name": "PTP domain"
+      },
+      "unit_name": {
+        "name": "Unit name"
+      },
+      "host_name": {
+        "name": "Host name"
       }
     },
     "switch": {
@@ -198,6 +228,16 @@
           "snapshot_interval": "Seconds between screenshots"
         }
       }
+    }
+  },
+  "issues": {
+    "sync_conflict": {
+      "title": "Two sync leaders in sync group {group}",
+      "description": "More than one BrightSign player acts as sync leader in sync group {group}: {leaders}. A sync group should have exactly one leader; the other players should be followers. Check the sync settings of the presentations on these players. This message disappears by itself when only one leader is left."
+    },
+    "address_taken": {
+      "title": "Another player answers at {host}",
+      "description": "A different BrightSign player now answers at {host}, so {name} is shown offline. This usually happens when players were swapped or got a new address from DHCP. Home Assistant follows the player to its new address as soon as it sees it on the network; you can also enter the new address with Reconfigure. This message disappears by itself."
     }
   }
 }

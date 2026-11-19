@@ -33,16 +33,31 @@ Menu names can differ slightly between BrightAuthor:connected versions.
    settings, "Local Web Server"), publish the presentation, then remove and re-add the
    player in Home Assistant (or use Reconfigure) so it detects the web server.
 
-## 3. Quick UDP test without BrightAuthor
+## 3. Demo presentation without BrightAuthor
 
-`demo/udp-demo/autorun.brs` is a tiny presentation for a **spare** SD card. The player
-sends `demo:start` and a heartbeat every 10 seconds to port 5000, and answers anything
-it receives on port 5001 with `demo:ack:<message>`.
+`demo/ha-demo/autorun.brs` is a presentation for a **spare** SD card that offers everything
+the integration can pick up from a presentation:
 
-- In Home Assistant, the **UDP message** event and **Last UDP message** sensor appear
-  after the first message.
-- Call `brightsign.send_udp` with the player's IP, port `5001` and a message: the screen
-  shows it and Home Assistant receives `demo:ack:<message>`.
+- a Local Web Server on port 8080 with 3 user variables (Title, Message, Mode) and 6 UDP
+  commands (Play, Pause, Stop, Next, Previous, Ping), and an mDNS advertisement
+- UDP messages to port 5000: `bs:start`, `bs:state:<state>`, `bs:item:<n>`,
+  `bs:var:<name>=<value>`, `bs:pong` and `bs:heartbeat:<n>` every 60 seconds
+- the status on screen (so it also shows in the screenshot camera)
+
+By default it switches the player's wired network to **DHCP** once (older sync scripts often
+leave a fixed address behind); set `useDhcp = false` at the top to keep the current settings.
+
+Checklist after booting the demo (within 5 minutes, or choose Reconfigure right away):
+
+| Check | Expected |
+| --- | --- |
+| Autorun version | `ha-demo 1.0` |
+| Variable Title / Message / Mode | Values shown; changing one changes the screen |
+| UDP Play / Pause / Next / Ping buttons | Screen changes; **UDP message** shows `bs:state:...`, `bs:item:...` or `bs:pong` |
+| `brightsign.send_command` (REST players) | Same as the buttons |
+| Unit name | The unit name of the player (or `BrightSign demo`) |
+
+Quick check in a browser: `http://<player>:8080/GetID` shows the player's XML identity.
 
 ## 4. Sync groups
 
@@ -55,5 +70,12 @@ logger:
     custom_components.brightsign: debug
 ```
 
-the log shows `Listening for BrightSign sync traffic` and
-`Receiving BrightSign sync traffic from <address>`.
+the log shows which sources it receives: `Receiving BrightSign sync traffic from <address>`,
+`Receiving PTP traffic from <address> (domain n, master/follower)` and
+`Receiving Ethernet sync commands from <address>`.
+
+| Check | Expected |
+| --- | --- |
+| Sync role | Leader on the leader, Follower on followers (PTP), Leader on the master of Ethernet sync scripts |
+| Sync group / PTP domain | The same domain on all players of one group |
+| Two leaders in one group (test by starting a second leader) | After 30 s *Sync conflict* on, and a repair message listing both |

@@ -10,7 +10,7 @@ from homeassistant.const import CONF_HOST, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 
 from . import BrightSignConfigEntry
-from .const import CONF_FINGERPRINT, CONF_MAC, CONF_SERIAL
+from .const import CONF_FINGERPRINT, CONF_HOSTNAME, CONF_MAC, CONF_SERIAL
 
 TO_REDACT = {
     CONF_PASSWORD,
@@ -18,6 +18,7 @@ TO_REDACT = {
     CONF_MAC,
     CONF_SERIAL,
     CONF_FINGERPRINT,
+    CONF_HOSTNAME,
     "serial",
     "serialNumber",
     "deviceName",
@@ -29,6 +30,9 @@ TO_REDACT = {
     "ip",
     "mac",
     "user_vars",
+    "unit_name",
+    "other_player",
+    "other_leaders",
 }
 
 
@@ -52,7 +56,9 @@ async def async_get_config_entry_diagnostics(
                 "item": sync.item,
                 "last_item_duration": sync.last_item_duration,
                 "encrypted": sync.encrypted,
+                "domain": sync.domain,
             },
+            "sync_role": asdict(runtime.monitor.view(entry.data[CONF_HOST])),
         },
         TO_REDACT,
     )

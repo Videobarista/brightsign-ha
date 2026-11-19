@@ -10,7 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import device_registry as dr, issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .api import (
@@ -24,9 +24,22 @@ from .api import (
     info_value,
     parse_edid,
 )
-from .const import CONF_HAS_LEGACY, CONF_SERIAL, DOMAIN, SCAN_INTERVAL, STORAGE_POLL_EVERY
+from .const import (
+    CONF_HAS_LEGACY,
+    CONF_HAS_LWS,
+    CONF_SERIAL,
+    DOMAIN,
+    REDETECT_EVERY,
+    SCAN_INTERVAL,
+    STORAGE_POLL_EVERY,
+)
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _is_serial(value: str) -> bool:
+    """BrightSign serial numbers are 12 letters and digits."""
+    return len(value) == 12 and value.isalnum()
 
 
 @dataclass
@@ -42,6 +55,8 @@ class BrightSignData:
     video_modes: list[str] = field(default_factory=list)
     display: dict[str, str] = field(default_factory=dict)
     storage: dict[str, int] = field(default_factory=dict)
+    unit_name: str | None = None  # REST: registry networking/un
+    other_player: str | None = None  # serial of another player found at this address
 
     @property
     def player_name(self) -> str | None:
@@ -49,10 +64,24 @@ class BrightSignData:
         identity = self.lws.identity if self.lws else {}
         return (
             info_value(self.info, "deviceName")
+            or self.unit_name
             or identity.get("unitName")
             or self.legacy.get("name")
             or None
         )
+
+    @property
+    def reported_serial(self) -> str | None:
+        """Serial number the player at this address reports."""
+        identity = self.lws.identity if self.lws else {}
+        serial = (
+            info_value(self.info, "serial")
+            or identity.get("serialNumber")
+            or self.legacy.get("serial")
+        )
+        if not serial:
+            return None
+        return str(serial).strip().upper() or None
 
 
 class BrightSignCoordinator(DataUpdateCoordinator[BrightSignData]):
@@ -81,6 +110,9 @@ class BrightSignCoordinator(DataUpdateCoordinator[BrightSignData]):
         self.has_lws = has_lws
         self.has_legacy = has_legacy
         self._polls = 0
+        self._cycle = 0
+        self._unit_name: str | None = None
+        self._unit_name_supported = True
         self._video_modes: list[str] = []
         self._display: dict[str, str] = {}
         self._display_attached: object = None
@@ -131,8 +163,73 @@ class BrightSignCoordinator(DataUpdateCoordinator[BrightSignData]):
                 _LOGGER.debug("Info page poll of %s failed: %s", self.client.host, err)
         if not data.online:
             data.online = await self.client.async_reachable()
+        self._cycle += 1
+        if data.online and self._cycle % REDETECT_EVERY == 0:
+            await self._async_redetect()
+        if not self._async_check_identity(data):
+            return BrightSignData(other_player=data.reported_serial)
         self._async_adopt_player_name(data)
         return data
+
+    def _async_check_identity(self, data: BrightSignData) -> bool:
+        """False when another player answers at this address (e.g. after a DHCP change)."""
+        entry = self.config_entry
+        expected = str(entry.data.get(CONF_SERIAL) or "").strip().upper()
+        reported = data.reported_serial
+        issue_id = f"address_taken_{entry.entry_id}"
+        if reported and not expected:
+            self.hass.config_entries.async_update_entry(
+                entry, data={**entry.data, CONF_SERIAL: reported}
+            )
+        if (
+            not reported
+            or not expected
+            or reported == expected
+            # Only compare real serial numbers (12 characters): an older entry may hold a
+            # guess from a custom host name.
+            or not (_is_serial(reported) and _is_serial(expected))
+        ):
+            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+            return True
+        if self.data is None or self.data.other_player != reported:
+            _LOGGER.warning(
+                "Another BrightSign player answers at %s: %s is shown offline until it is found "
+                "at its new address (or reconfigured)",
+                self.client.host,
+                entry.title,
+            )
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="address_taken",
+            translation_placeholders={"name": entry.title, "host": self.client.host},
+        )
+        return False
+
+    async def _async_redetect(self) -> None:
+        """A new presentation can bring a web server; the Info page can be switched on."""
+        entry = self.config_entry
+        found: dict[str, bool] = {}
+        if not self.has_lws:
+            try:
+                lws = await self.client.async_get_lws()
+            except BrightSignConnectionError:
+                lws = None
+            if lws is not None and lws.identity:
+                found[CONF_HAS_LWS] = True
+        if not self.has_rest and self.has_legacy is False:
+            try:
+                if await self.client.async_get_legacy_info():
+                    found[CONF_HAS_LEGACY] = True
+            except (BrightSignConnectionError, BrightSignAuthError, BrightSignNotSupported):
+                pass  # still not available
+        if found:
+            _LOGGER.debug("New interfaces on %s: %s; reloading", self.client.host, list(found))
+            self.hass.config_entries.async_update_entry(entry, data={**entry.data, **found})
+            self.hass.config_entries.async_schedule_reload(entry.entry_id)
 
     async def _async_update_rest_extras(self, data: BrightSignData) -> None:
         """Slow-changing REST data: video modes, connected display, storage."""
@@ -150,6 +247,16 @@ class BrightSignCoordinator(DataUpdateCoordinator[BrightSignData]):
                 self._storage = await self.client.async_get_storage()
         except (BrightSignConnectionError, BrightSignNotSupported) as err:
             _LOGGER.debug("Extra REST data of %s not available: %s", self.client.host, err)
+        if self._unit_name_supported and (
+            self._polls == 1 or self._polls % STORAGE_POLL_EVERY == 0
+        ):
+            try:
+                self._unit_name = await self.client.async_get_unit_name()
+            except (BrightSignNotSupported, BrightSignAuthError):
+                self._unit_name_supported = False  # not offered (or not allowed): stop asking
+            except BrightSignConnectionError as err:
+                _LOGGER.debug("Unit name of %s not available: %s", self.client.host, err)
+        data.unit_name = self._unit_name
         data.video_modes = self._video_modes
         data.display = self._display if attached is not False else {}
         data.storage = self._storage
