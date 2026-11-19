@@ -7,7 +7,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.brightsign.api import BrightSignConnectionError, LwsData
-from custom_components.brightsign.const import CONF_HAS_LWS, CONF_SERIAL, DOMAIN, REDETECT_EVERY
+from custom_components.brightsign.const import (
+    CONF_HAS_LWS,
+    CONF_HOSTNAME,
+    CONF_SERIAL,
+    DOMAIN,
+    REDETECT_EVERY,
+)
 from custom_components.brightsign.coordinator import BrightSignCoordinator
 from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant
@@ -71,3 +77,35 @@ async def test_new_web_server_is_detected(hass: HomeAssistant) -> None:
             await coordinator._async_update_data()
     assert entry.data[CONF_HAS_LWS] is True
     reload.assert_called_once_with(entry.entry_id)
+
+
+async def test_own_host_name_names_the_player(hass: HomeAssistant) -> None:
+    """A player that reports no name is named after its own host name."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="10.0.0.6",
+        title="BrightSign player",
+        data={CONF_HOST: "10.0.0.6", CONF_HOSTNAME: "Wall-leader"},
+    )
+    entry.add_to_hass(hass)
+    client = _client("CCCC33333333")
+    client.host = "10.0.0.6"
+    coordinator = BrightSignCoordinator(hass, entry, client, has_rest=False, has_lws=False)
+    data = await coordinator._async_update_data()
+    assert data.online
+    assert entry.title == "Wall-leader"
+
+
+async def test_default_host_name_is_not_used_as_name(hass: HomeAssistant) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="10.0.0.7",
+        title="BrightSign player",
+        data={CONF_HOST: "10.0.0.7", CONF_HOSTNAME: "brightsign-cccc33333333"},
+    )
+    entry.add_to_hass(hass)
+    client = _client("CCCC33333333")
+    client.host = "10.0.0.7"
+    coordinator = BrightSignCoordinator(hass, entry, client, has_rest=False, has_lws=False)
+    await coordinator._async_update_data()
+    assert entry.title == "BrightSign player"

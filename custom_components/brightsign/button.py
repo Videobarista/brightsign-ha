@@ -76,12 +76,22 @@ class BrightSignButton(BrightSignEntity, ButtonEntity):
         super().__init__(coordinator, description.key)
         self.entity_description = description
 
+    @property
+    def available(self) -> bool:
+        """CEC buttons go unavailable once the player turned out not to offer CEC."""
+        if self.entity_description.key.startswith("cec_") and (
+            self.coordinator.client.cec_supported is False
+        ):
+            return False
+        return super().available
+
     async def async_press(self) -> None:
         if not self.player_online:
             raise HomeAssistantError(f"BrightSign {self.coordinator.client.host} is offline")
         try:
             await self.entity_description.press_fn(self.coordinator.client)
         except BrightSignError as err:
+            self.async_write_ha_state()
             raise HomeAssistantError(f"BrightSign command failed: {err}") from err
 
 

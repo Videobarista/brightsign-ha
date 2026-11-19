@@ -489,6 +489,8 @@ class BrightSignClient:
         self.rest_scheme = rest_scheme
         self.fingerprint = fingerprint
         self._no_verify_context = no_verify_context
+        self.cec_supported: bool | None = None  # None: not tried yet
+        self._snapshot_delete: bool | None = None  # None: not tried yet
 
     def _ssl(self) -> aiohttp.Fingerprint | bool:
         """Pinned certificate when known; the player's certificate is self-signed."""
@@ -546,6 +548,12 @@ class BrightSignClient:
                     if resp.status == 404:
                         raise BrightSignNotSupported(path)
                     if resp.status >= 400:
+                        detail = sanitize_text(
+                            (await resp.content.read(300)).decode("utf-8", errors="replace"), 200
+                        )
+                        _LOGGER.debug(
+                            "%s %s on %s: HTTP %s %s", method, path, self.host, resp.status, detail
+                        )
                         raise BrightSignConnectionError(f"HTTP {resp.status} for {path}")
                     return await self._read_limited(resp, limit)
         except aiohttp.ServerFingerprintMismatch as err:
@@ -595,7 +603,14 @@ class BrightSignClient:
         """Send a raw HDMI-CEC payload out of HDMI-1 (fixed payloads only)."""
         if not re.fullmatch(r"(?:[0-9a-f]{2}){2,16}", hex_command):
             raise BrightSignError("invalid CEC payload")
-        await self._rest("POST", "/api/v1/sendCecX/", {"hexCommand": hex_command})
+        try:
+            await self._rest("POST", "/api/v1/sendCecX/", {"hexCommand": hex_command})
+        except BrightSignNotSupported as err:
+            self.cec_supported = False
+            raise BrightSignNotSupported(
+                "this player's BrightSignOS does not offer CEC commands through the DWS"
+            ) from err
+        self.cec_supported = True
 
     async def async_get_video_modes(self) -> list[str]:
         """Video modes the connected display supports."""
@@ -635,21 +650,15 @@ class BrightSignClient:
         image: bytes | None = None
         if isinstance(filename, str) and _SNAPSHOT_PATH.fullmatch(filename):
             path = "/api/v1/files/" + filename.lstrip("/")
-            try:
-                image = await self._http(
-                    "GET",
-                    f"{self.rest_scheme}://{self.host}{path}?contents&stream",
-                    path,
-                    accept="image/*",
-                    ssl_param=self._ssl(),
-                    limit=MAX_IMAGE_BYTES,
-                )
-            except BrightSignError:
-                image = None
-            try:
-                await self._rest("DELETE", path + "/")
-            except BrightSignError as err:
-                _LOGGER.debug("Could not remove snapshot %s from %s: %s", path, self.host, err)
+            image = await self._async_download_image(path)
+            if (
+                image
+                and image.startswith(b"\xff\xd8")
+                and not image.rstrip(b"\x00").endswith(b"\xff\xd9")
+            ):
+                await asyncio.sleep(0.5)  # the player was still writing the file
+                image = await self._async_download_image(path) or image
+            await self._async_remove_snapshot(path)
         if not image:
             thumbnail = find_key(data, "remoteSnapshotThumbnail")
             if isinstance(thumbnail, str) and "," in thumbnail:
@@ -660,6 +669,41 @@ class BrightSignClient:
         if image and not image.startswith((b"\xff\xd8", b"\x89PNG")):
             return None
         return image
+
+    async def _async_download_image(self, path: str) -> bytes | None:
+        try:
+            return await self._http(
+                "GET",
+                f"{self.rest_scheme}://{self.host}{path}?contents&stream",
+                path,
+                accept="image/*",
+                ssl_param=self._ssl(),
+                limit=MAX_IMAGE_BYTES,
+            )
+        except BrightSignError as err:
+            _LOGGER.debug("Could not download snapshot %s from %s: %s", path, self.host, err)
+            return None
+
+    async def _async_remove_snapshot(self, path: str) -> None:
+        """Remove a snapshot from the SD card (players that allow it)."""
+        if self._snapshot_delete is False:
+            return
+        for candidate in (path, path + "/"):
+            try:
+                await self._rest("DELETE", candidate)
+            except BrightSignNotSupported:
+                continue
+            except BrightSignError as err:
+                _LOGGER.debug("Could not remove snapshot %s from %s: %s", path, self.host, err)
+                return
+            self._snapshot_delete = True
+            return
+        if self._snapshot_delete is None:
+            _LOGGER.debug(
+                "%s does not allow removing snapshots; it keeps its own number of snapshots",
+                self.host,
+            )
+        self._snapshot_delete = False
 
     async def async_get_legacy_info(self) -> dict[str, str]:
         """Read-only fallback: the Info page of a pre-REST Diagnostic Web Server."""

@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from custom_components.brightsign.api import (
     MAX_SCAN_HOSTS,
+    BrightSignClient,
+    BrightSignNotSupported,
     async_scan_for_players,
     is_brightsign_mac,
     parse_arp_table,
@@ -93,3 +97,75 @@ def test_player_time() -> None:
     assert player_time("1\n1\n20261118T155417") == datetime(2026, 11, 18, 15, 54, 17)
     assert player_time("garbage") is None
     assert player_time("") is None
+
+
+JPEG = b"\xff\xd8" + b"\x00" * 64 + b"\xff\xd9"
+SNAPSHOT = "/sd/remote_snapshots/img-2026-11-19-06-37-17.jpg"
+
+
+async def test_snapshot_is_downloaded_and_removed() -> None:
+    """Removing a snapshot tries the path without and with a trailing slash."""
+    client = BrightSignClient(MagicMock(), "10.0.0.5", rest_scheme="http")
+    calls: list[tuple[str, str]] = []
+
+    async def fake_rest(method: str, path: str, payload: dict | None = None):
+        calls.append((method, path))
+        if method == "POST":
+            return {"data": {"result": {"filename": SNAPSHOT}}}
+        if path.endswith(".jpg"):
+            raise BrightSignNotSupported(path)
+        return {}
+
+    with (
+        patch.object(client, "_rest", fake_rest),
+        patch.object(client, "_http", AsyncMock(return_value=JPEG)),
+    ):
+        assert await client.async_snapshot() == JPEG
+        assert calls[-1] == ("DELETE", "/api/v1/files" + SNAPSHOT + "/")
+
+
+async def test_snapshot_removal_stops_when_not_allowed() -> None:
+    client = BrightSignClient(MagicMock(), "10.0.0.5", rest_scheme="http")
+    deletes: list[str] = []
+
+    async def fake_rest(method: str, path: str, payload: dict | None = None):
+        if method == "POST":
+            return {"data": {"result": {"filename": SNAPSHOT}}}
+        deletes.append(path)
+        raise BrightSignNotSupported(path)
+
+    with (
+        patch.object(client, "_rest", fake_rest),
+        patch.object(client, "_http", AsyncMock(return_value=JPEG)),
+    ):
+        await client.async_snapshot()
+        await client.async_snapshot()
+    assert len(deletes) == 2  # both forms once, then no more attempts
+
+
+async def test_incomplete_snapshot_is_downloaded_again() -> None:
+    client = BrightSignClient(MagicMock(), "10.0.0.5", rest_scheme="http")
+    download = AsyncMock(side_effect=[JPEG[:20], JPEG])
+
+    async def fake_rest(method: str, path: str, payload: dict | None = None):
+        if method == "POST":
+            return {"data": {"result": {"filename": SNAPSHOT}}}
+        return {}
+
+    with (
+        patch.object(client, "_rest", fake_rest),
+        patch.object(client, "_http", download),
+        patch("custom_components.brightsign.api.asyncio.sleep", AsyncMock()),
+    ):
+        assert await client.async_snapshot() == JPEG
+    assert download.call_count == 2
+
+
+async def test_cec_not_offered() -> None:
+    client = BrightSignClient(MagicMock(), "10.0.0.5", rest_scheme="http")
+    with (
+        patch.object(client, "_rest", AsyncMock(side_effect=BrightSignNotSupported("x"))),
+        pytest.raises(BrightSignNotSupported),
+    ):
+        await client.async_send_cec("4004")
+    assert client.cec_supported is False

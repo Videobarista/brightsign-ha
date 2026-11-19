@@ -27,6 +27,7 @@ from .api import (
 from .const import (
     CONF_HAS_LEGACY,
     CONF_HAS_LWS,
+    CONF_HOSTNAME,
     CONF_SERIAL,
     DOMAIN,
     REDETECT_EVERY,
@@ -277,9 +278,14 @@ class BrightSignCoordinator(DataUpdateCoordinator[BrightSignData]):
         )
 
     def _async_adopt_player_name(self, data: BrightSignData) -> None:
-        """Replace an address-based default title by the name the player reports."""
-        name = data.player_name
+        """Replace an address-based default title by the player's own (network) name."""
         entry = self.config_entry
+        hostname = str(entry.data.get(CONF_HOSTNAME) or "")
+        # A host name of its own (not the default brightsign-<serial>) names the player too
+        network_name = (
+            hostname if hostname and not hostname.lower().startswith("brightsign-") else None
+        )
+        name = data.player_name or network_name
         if not name or entry.title == name:
             return
         serial = entry.data.get(CONF_SERIAL) or data.legacy.get("serial") or ""

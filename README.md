@@ -39,8 +39,9 @@ The REST API, the presentation's XML API, UDP and sync multicast are documented 
 For players without the REST API (older BrightSignOS) the integration reads the **Info page** of
 the Diagnostic Web Server as a fallback: read-only, one page, nothing is changed on the player.
 
-Players are named after the name they report (REST API, presentation or Info page), not their
-IP address. Sync entities are created as soon as a player shows up in a sync group.
+Players are named after the name they report (REST API, presentation or Info page), or else
+their own host name on the network (not the default `brightsign-<serial>`), never their IP
+address. Sync entities are created as soon as a player shows up in a sync group.
 
 A new presentation is picked up by itself: every 5 minutes the integration looks again for a
 presentation web server (and for the Info page on older players) and adds the entities. If a
@@ -125,6 +126,11 @@ a presentation can offer.
 
 ## Notes
 
+- **CEC buttons** use an experimental DWS command that older BrightSignOS versions do not offer.
+  On such a player the first press says so and the CEC buttons become unavailable; the HDMI
+  output switch still works.
+- **Screenshots**: each screenshot is written to the player's SD card and removed afterwards
+  when the player allows it; otherwise the player keeps its own number of snapshots.
 - A switched-off player is normal: its entities stay available and show it as offline (online
   off, HDMI off, other values unknown) instead of turning unavailable. Commands to an offline
   player are refused with a clear message.
