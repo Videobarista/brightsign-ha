@@ -14,6 +14,7 @@ CONF_HAS_LWS = "has_lws"
 CONF_FINGERPRINT = "fingerprint"
 CONF_HAS_LEGACY = "has_legacy"
 CONF_HOSTNAME = "hostname"  # DHCP host name (network name)
+CONF_ADOPTED_NAME = "adopted_name"  # name the integration gave the entry (not the user)
 
 DEFAULT_PASSWORD = ""
 DWS_USERNAME = "admin"

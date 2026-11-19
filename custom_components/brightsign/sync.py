@@ -64,11 +64,20 @@ def open_multicast_socket(group: str, port: int) -> socket.socket:
     return sock
 
 
+def is_encrypted(value: object) -> bool:
+    """True for an encrypted roSyncManager field, e.g. ``{"e": "<base64>"}`` (BrightSignOS 8+)."""
+    text = str(value).strip()
+    return text.startswith("{") and '"e"' in text
+
+
 def sync_domain(message: dict | None) -> str | None:
     """Sync group (roSyncManager domain) of a decoded message; None when unknown."""
     if not message:
         return None
-    domain = sanitize_text(message.get("d", ""), 64)
+    raw = message.get("d", "")
+    if is_encrypted(raw):
+        return None
+    domain = sanitize_text(raw, 64)
     if domain.startswith("vsync:"):
         domain = domain[len("vsync:") :]
     return domain or None
@@ -303,13 +312,20 @@ class SyncTracker:
         before = self._snapshot()
         first = self._last_seen is None
         self._last_seen = time.monotonic()
-        if message is None:
+        payload = str(message.get("p", ""))[:256] if message else ""
+        if (
+            message is None
+            or "e" in message
+            or is_encrypted(message.get("d", ""))
+            or is_encrypted(payload)
+        ):
+            # Encrypted traffic: the player is active, but item and timing cannot be read
             self.encrypted = True
+            self.domain = sync_domain(message) or self.domain
         else:
             self.domain = sync_domain(message) or self.domain
             raw = sanitize_text(message.get("d", ""), 64)
             if raw and not raw.startswith("vsync"):
-                payload = str(message.get("p", ""))[:256]
                 lines = payload.strip().splitlines()
                 # The sync item is the line before the player time stamp
                 names = lines[:-1] if len(lines) > 1 and player_time(payload) else lines

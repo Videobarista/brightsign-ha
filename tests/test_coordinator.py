@@ -8,6 +8,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.brightsign.api import BrightSignConnectionError, LwsData
 from custom_components.brightsign.const import (
+    CONF_ADOPTED_NAME,
     CONF_HAS_LWS,
     CONF_HOSTNAME,
     CONF_SERIAL,
@@ -109,3 +110,27 @@ async def test_default_host_name_is_not_used_as_name(hass: HomeAssistant) -> Non
     coordinator = BrightSignCoordinator(hass, entry, client, has_rest=False, has_lws=False)
     await coordinator._async_update_data()
     assert entry.title == "BrightSign player"
+
+
+async def test_adopted_name_follows_the_player(hass: HomeAssistant) -> None:
+    """A name the integration gave changes with the player; a name the user chose stays."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="AAAA11111111",
+        title="Old presentation",
+        data={
+            CONF_HOST: "10.0.0.5",
+            CONF_SERIAL: "AAAA11111111",
+            CONF_ADOPTED_NAME: "Old presentation",
+        },
+    )
+    entry.add_to_hass(hass)
+    coordinator = BrightSignCoordinator(
+        hass, entry, _client("AAAA11111111"), has_rest=True, has_lws=False
+    )
+    await coordinator._async_update_data()
+    assert entry.title == "Wall-leader"  # the unit name the player reports now
+
+    hass.config_entries.async_update_entry(entry, title="Lobby screen")  # renamed by the user
+    await coordinator._async_update_data()
+    assert entry.title == "Lobby screen"

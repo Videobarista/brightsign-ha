@@ -208,7 +208,6 @@ async def test_cec_not_offered() -> None:
         pytest.raises(BrightSignNotSupported),
     ):
         await client.async_send_cec("4004")
-    assert client.cec_supported is False
 
 
 class _Content:

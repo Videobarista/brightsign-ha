@@ -126,6 +126,18 @@ async def test_sync_heartbeat_does_not_write_states(hass: HomeAssistant) -> None
     assert tracker.encrypted
 
 
+def test_encrypted_sync_traffic_is_not_shown_as_item() -> None:
+    """BrightSignOS 8+ encrypts the payload: the player is active, the item stays unknown."""
+    tracker = SyncTracker(MagicMock(), "10.0.0.5")
+    tracker.async_handle({"d": "1", "p": '{"e":"Un2ANjaAJOtJ6LlnSRcHqjFircXsgKSMCyymc927"}'})
+    assert tracker.encrypted
+    assert tracker.item is None
+    assert tracker.domain == "1"
+    tracker.async_handle({"e": "AU5FBY/h4VSdn+/jgwPAsXzpybepwt6XIoU"})
+    assert tracker.item is None
+    assert sync_domain({"d": '{"e":"abc"}'}) is None
+
+
 def test_sync_domain() -> None:
     assert sync_domain({"d": "vsync:1"}) == "1"
     assert sync_domain({"d": "BS1", "p": "x"}) == "BS1"

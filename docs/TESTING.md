@@ -51,11 +51,11 @@ Checklist after booting the demo (within 5 minutes, or choose Reconfigure right 
 
 | Check | Expected |
 | --- | --- |
-| Autorun version | `ha-demo 1.0` |
+| Autorun version | `ha-demo 1.1` |
 | Variable Title / Message / Mode | Values shown; changing one changes the screen |
 | UDP Play / Pause / Next / Ping buttons | Screen changes; **UDP message** shows `bs:state:...`, `bs:item:...` or `bs:pong` |
 | `brightsign.send_command` (REST players) | Same as the buttons |
-| Unit name | The unit name of the player (or `BrightSign demo`) |
+| Unit name | The unit name set on the player (none when it has no unit name) |
 
 Quick check in a browser: `http://<player>:8080/GetID` shows the player's XML identity.
 

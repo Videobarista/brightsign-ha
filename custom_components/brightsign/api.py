@@ -489,7 +489,6 @@ class BrightSignClient:
         self.rest_scheme = rest_scheme
         self.fingerprint = fingerprint
         self._no_verify_context = no_verify_context
-        self.cec_supported: bool | None = None  # None: not tried yet
         self._snapshot_delete: bool | None = None  # None: not tried yet
 
     def _ssl(self) -> aiohttp.Fingerprint | bool:
@@ -609,11 +608,10 @@ class BrightSignClient:
         try:
             await self._rest("POST", "/api/v1/sendCecX/", {"hexCommand": hex_command})
         except BrightSignNotSupported as err:
-            self.cec_supported = False
             raise BrightSignNotSupported(
-                "this player's BrightSignOS does not offer CEC commands through the DWS"
+                "the player could not send the CEC command (no display with CEC connected, "
+                "or a BrightSignOS without CEC commands in the DWS)"
             ) from err
-        self.cec_supported = True
 
     async def async_get_video_modes(self) -> list[str]:
         """Video modes the connected display supports."""

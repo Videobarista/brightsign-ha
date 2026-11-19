@@ -13,9 +13,9 @@
 ' Reconfigure on the player (or add it), so the integration finds the web server.
 '
 ' Network: by default the demo switches the player's wired network to DHCP (once; the
-' setting is kept). Older sync scripts often leave a fixed address such as 192.168.1.10
-' behind, which makes the player unreachable on another network. Set useDhcp = false to
-' keep the player's current network settings.
+' setting is kept). Older sync scripts often leave a fixed address behind, which makes
+' the player unreachable from another network. Set useDhcp = false to keep the player's
+' current network settings.
 '
 ' Commands (UDP to port 5000, the buttons in Home Assistant, or brightsign.send_command):
 '   play, pause, stop, next, previous, ping, set:<variable>=<value>
@@ -40,8 +40,7 @@ Sub Main()
     m.model = info.GetModel()
     m.firmware = info.GetVersion()
     registry = CreateObject("roRegistrySection", "networking")
-    m.unitName = registry.Read("un")
-    if m.unitName = "" then m.unitName = "BrightSign demo"
+    m.unitName = registry.Read("un")  ' empty when no unit name was set: then none is reported
 
     m.varNames = ["Title", "Message", "Mode"]
     m.varValues = ["Welcome", "Hello from Home Assistant", "demo"]
@@ -127,7 +126,7 @@ Sub HandleHttp(request As Object)
         body = body + XmlTag("unitDescription", "Home Assistant demo")
         body = body + XmlTag("serialNumber", m.serial)
         body = body + XmlTag("functionality", "standalone")
-        body = body + XmlTag("autorunVersion", "ha-demo 1.0")
+        body = body + XmlTag("autorunVersion", "ha-demo 1.1")
         body = body + XmlTag("firmwareVersion", m.firmware)
         body = body + "</BrightSignID>"
     else if page = "GetUserVars" then
@@ -230,7 +229,9 @@ End Sub
 
 Sub ShowStatus()
     m.text.Clear()
-    m.text.PushString("Home Assistant demo - " + m.unitName)
+    title = m.unitName
+    if title = "" then title = m.serial
+    m.text.PushString("Home Assistant demo - " + title)
     m.text.PushString(m.model + "   " + m.serial)
     m.text.PushString("State: " + m.state + "   Item: " + StrI(m.item).Trim())
     for i = 0 to m.varNames.Count() - 1

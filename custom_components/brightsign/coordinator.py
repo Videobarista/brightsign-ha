@@ -25,6 +25,7 @@ from .api import (
     parse_edid,
 )
 from .const import (
+    CONF_ADOPTED_NAME,
     CONF_HAS_LEGACY,
     CONF_HAS_LWS,
     CONF_HOSTNAME,
@@ -289,12 +290,21 @@ class BrightSignCoordinator(DataUpdateCoordinator[BrightSignData]):
         if not name or entry.title == name:
             return
         serial = entry.data.get(CONF_SERIAL) or data.legacy.get("serial") or ""
-        generated = entry.title in (f"BrightSign {entry.data[CONF_HOST]}", "BrightSign player") or (
-            bool(serial) and entry.title.startswith("BrightSign ") and entry.title.endswith(serial)
+        generated = (
+            entry.title in (f"BrightSign {entry.data[CONF_HOST]}", "BrightSign player")
+            or (
+                bool(serial)
+                and entry.title.startswith("BrightSign ")
+                and entry.title.endswith(serial)
+            )
+            # A name the integration gave earlier follows the player (e.g. a new presentation)
+            or entry.title == entry.data.get(CONF_ADOPTED_NAME)
         )
         if not generated:
-            return  # the user (or an earlier poll) already chose a name
-        self.hass.config_entries.async_update_entry(entry, title=name)
+            return  # the user chose this name
+        self.hass.config_entries.async_update_entry(
+            entry, title=name, data={**entry.data, CONF_ADOPTED_NAME: name}
+        )
         registry = dr.async_get(self.hass)
         device = registry.async_get_device(
             identifiers={(DOMAIN, entry.unique_id or entry.entry_id)}
