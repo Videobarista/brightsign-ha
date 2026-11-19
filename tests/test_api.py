@@ -11,6 +11,7 @@ import pytest
 from custom_components.brightsign.api import (
     MAX_SCAN_HOSTS,
     BrightSignClient,
+    BrightSignConnectionError,
     BrightSignNotSupported,
     async_scan_for_players,
     is_brightsign_mac,
@@ -169,3 +170,38 @@ async def test_cec_not_offered() -> None:
     ):
         await client.async_send_cec("4004")
     assert client.cec_supported is False
+
+
+class _Content:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+
+    async def iter_chunked(self, size: int):
+        for chunk in self._chunks:
+            yield chunk
+
+
+async def test_responses_are_read_to_the_end() -> None:
+    """A large image arrives in several chunks: all of them are read (no half screenshots)."""
+    client = BrightSignClient(MagicMock(), "10.0.0.5", rest_scheme="http")
+    response = MagicMock()
+    response.content_length = None
+    response.content = _Content([b"a" * 65536, b"b" * 65536, b"c" * 100])
+    assert await client._read_limited(response, 200_000) == b"a" * 65536 + b"b" * 65536 + b"c" * 100
+    response.content = _Content([b"a" * 65536, b"b" * 65536])
+    with pytest.raises(BrightSignConnectionError):
+        await client._read_limited(response, 100_000)
+
+
+async def test_video_mode_uses_documented_body() -> None:
+    client = BrightSignClient(MagicMock(), "10.0.0.5", rest_scheme="http")
+    rest = AsyncMock(return_value={})
+    with patch.object(client, "_rest", rest):
+        await client.async_set_video_mode("1920x1080x60p")
+    rest.assert_called_once_with(
+        "PUT", "/api/v1/video/hdmi/output/0/mode/", {"name": {"modeName": "1920x1080x60p"}}
+    )
+    rest = AsyncMock(side_effect=[BrightSignConnectionError("HTTP 500 for x"), {}])
+    with patch.object(client, "_rest", rest):
+        await client.async_set_video_mode("1920x1080x60p")
+    assert rest.call_args.args[2] == {"modeName": "1920x1080x60p"}

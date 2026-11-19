@@ -503,10 +503,13 @@ class BrightSignClient:
     ) -> bytes:
         if resp.content_length is not None and resp.content_length > limit:
             raise BrightSignConnectionError("response too large")
-        body = await resp.content.read(limit + 1)
-        if len(body) > limit:
-            raise BrightSignConnectionError("response too large")
-        return body
+        # read() with a size returns as soon as some data arrived: read on until the end
+        body = bytearray()
+        async for chunk in resp.content.iter_chunked(65536):
+            body += chunk
+            if len(body) > limit:
+                raise BrightSignConnectionError("response too large")
+        return bytes(body)
 
     # ----- HTTP with digest authentication -------------------------------
 
@@ -620,7 +623,14 @@ class BrightSignClient:
         """Change the video mode (until the presentation sets its own mode again)."""
         if not _VIDEO_MODE.fullmatch(mode):
             raise BrightSignError("invalid video mode")
-        await self._rest("PUT", "/api/v1/video/hdmi/output/0/mode/", {"modeName": mode})
+        path = "/api/v1/video/hdmi/output/0/mode/"
+        try:
+            # The form of BrightSign's own example; players reject a bare {"modeName": ...}
+            await self._rest("PUT", path, {"name": {"modeName": mode}})
+        except BrightSignConnectionError as err:
+            if not str(err).startswith("HTTP 500"):
+                raise
+            await self._rest("PUT", path, {"modeName": mode})
 
     async def async_get_edid(self) -> dict[str, str]:
         """Identify the connected display."""
