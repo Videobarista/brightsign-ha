@@ -661,14 +661,15 @@ class BrightSignClient:
         if isinstance(filename, str) and _SNAPSHOT_PATH.fullmatch(filename):
             path = "/api/v1/files/" + filename.lstrip("/")
             image = await self._async_download_image(path)
-            if (
-                image
-                and image.startswith(b"\xff\xd8")
-                and not image.rstrip(b"\x00").endswith(b"\xff\xd9")
-            ):
-                await asyncio.sleep(0.5)  # the player was still writing the file
+            for _attempt in range(2):
+                if image and not (
+                    image.startswith(b"\xff\xd8")
+                    and not image.rstrip(b"\x00").endswith(b"\xff\xd9")
+                ):
+                    break  # complete
+                await asyncio.sleep(1)  # the player is still writing the file
                 image = await self._async_download_image(path) or image
-            await self._async_remove_snapshot(path)
+            await self._async_remove_snapshot(path, downloaded=image is not None)
         if not image:
             thumbnail = find_key(data, "remoteSnapshotThumbnail")
             if isinstance(thumbnail, str) and "," in thumbnail:
@@ -690,11 +691,14 @@ class BrightSignClient:
                 ssl_param=self._ssl(),
                 limit=MAX_IMAGE_BYTES,
             )
+        except BrightSignNotSupported:
+            _LOGGER.debug("Snapshot %s on %s is not there (yet)", path, self.host)
+            return None
         except BrightSignError as err:
             _LOGGER.debug("Could not download snapshot %s from %s: %s", path, self.host, err)
             return None
 
-    async def _async_remove_snapshot(self, path: str) -> None:
+    async def _async_remove_snapshot(self, path: str, downloaded: bool = True) -> None:
         """Remove a snapshot from the SD card (players that allow it)."""
         if self._snapshot_delete is False:
             return
@@ -708,6 +712,8 @@ class BrightSignClient:
                 return
             self._snapshot_delete = True
             return
+        if not downloaded:
+            return  # the file may not exist: try again with the next snapshot
         if self._snapshot_delete is None:
             _LOGGER.debug(
                 "%s does not allow removing snapshots; it keeps its own number of snapshots",

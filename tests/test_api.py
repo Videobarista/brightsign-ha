@@ -144,6 +144,45 @@ async def test_snapshot_removal_stops_when_not_allowed() -> None:
     assert len(deletes) == 2  # both forms once, then no more attempts
 
 
+async def test_snapshot_not_written_yet_is_tried_again() -> None:
+    """A 404 right after taking the snapshot: wait and download again; removal is kept on."""
+    client = BrightSignClient(MagicMock(), "10.0.0.5", rest_scheme="http")
+    download = AsyncMock(side_effect=[BrightSignNotSupported("x"), JPEG])
+    deletes: list[str] = []
+
+    async def fake_rest(method: str, path: str, payload: dict | None = None):
+        if method == "POST":
+            return {"data": {"result": {"filename": SNAPSHOT}}}
+        deletes.append(path)
+        raise BrightSignNotSupported(path)
+
+    with (
+        patch.object(client, "_rest", fake_rest),
+        patch.object(client, "_http", download),
+        patch("custom_components.brightsign.api.asyncio.sleep", AsyncMock()),
+    ):
+        assert await client.async_snapshot() == JPEG
+    assert download.call_count == 2
+    assert client._snapshot_delete is False  # downloaded, but removing is not allowed
+
+
+async def test_missing_snapshot_does_not_stop_removal() -> None:
+    client = BrightSignClient(MagicMock(), "10.0.0.5", rest_scheme="http")
+
+    async def fake_rest(method: str, path: str, payload: dict | None = None):
+        if method == "POST":
+            return {"data": {"result": {"filename": SNAPSHOT}}}
+        raise BrightSignNotSupported(path)
+
+    with (
+        patch.object(client, "_rest", fake_rest),
+        patch.object(client, "_http", AsyncMock(side_effect=BrightSignNotSupported("x"))),
+        patch("custom_components.brightsign.api.asyncio.sleep", AsyncMock()),
+    ):
+        assert await client.async_snapshot() is None
+    assert client._snapshot_delete is None  # not decided: the file was never there
+
+
 async def test_incomplete_snapshot_is_downloaded_again() -> None:
     client = BrightSignClient(MagicMock(), "10.0.0.5", rest_scheme="http")
     download = AsyncMock(side_effect=[JPEG[:20], JPEG])
