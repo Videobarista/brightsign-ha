@@ -6,7 +6,6 @@ from collections.abc import Callable
 
 from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -95,13 +94,9 @@ def async_add_sync_entities_when_leader(
     factory: Callable[[], list[Entity]],
     add: Callable[[list[Entity]], None],
 ) -> None:
-    """Sync entities only exist for sync leaders: add them now if the player is (or was)
-    one, otherwise as soon as its first sync traffic arrives."""
-    entry = coordinator.config_entry
-    registry = er.async_get(hass)
-    prefix = entry.unique_id or entry.entry_id
-    known = any(registry.async_get_entity_id(platform, DOMAIN, f"{prefix}_{key}") for key in keys)
-    if tracker.seen or known:
+    """Sync entities only exist for sync leaders: they are added as soon as the first
+    sync traffic from this player arrives (platform and keys are kept for callers)."""
+    if tracker.seen:
         add(factory())
     else:
         tracker.async_on_first_seen(lambda: add(factory()))

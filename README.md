@@ -78,6 +78,9 @@ Sends a UDP message, e.g. to trigger a UDP input event of a BrightAuthor present
 - A switched-off player is normal: its entities stay available and show it as offline (online
   off, HDMI off, other values unknown) instead of turning unavailable. Commands to an offline
   player are refused with a clear message.
+- Sync monitoring needs Home Assistant in the **same network segment** (VLAN/subnet) as the
+  players: sync multicast is not routed. With debug logging on, the log shows "Listening for
+  BrightSign sync traffic" and "Receiving BrightSign sync traffic from <address>".
 - Sync entities only fill on the player that is the sync **leader**; followers do not send sync
   traffic. Encrypted sync traffic (BrightSignOS 8+ default) counts as activity but the item cannot
   be read.

@@ -71,7 +71,7 @@ class ProbeResult:
     name: str | None = None
     firmware: str | None = None
     fingerprint: str | None = None
-    legacy: bool = False
+    legacy: bool | None = False  # None: unknown (player did not answer), detect later
 
 
 @dataclass
@@ -305,7 +305,9 @@ def parse_legacy_info(page: str) -> dict[str, str]:
         if value.strip():  # "Label: value" on one line
             fields[key] = sanitize_text(value, 128)
         elif index + 1 < len(lines):  # "Label:" followed by the value
-            fields[key] = sanitize_text(lines[index + 1], 128)
+            following = lines[index + 1]
+            if following.partition(":")[0].strip().lower() not in _LEGACY_LABELS:
+                fields[key] = sanitize_text(following, 128)
     if "video_mode" in fields:
         fields["video_mode"] = fields["video_mode"].split(" (")[0]
     return fields if ("serial" in fields or "firmware" in fields) else {}
@@ -386,7 +388,8 @@ class BrightSignClient:
         accept: str = "application/json",
         ssl_param: aiohttp.Fingerprint | bool = False,
     ) -> bytes:
-        headers = {"Accept": accept}
+        # Older players announce keep-alive but drop the connection: never reuse it.
+        headers = {"Accept": accept, "Connection": "close"}
         try:
             async with asyncio.timeout(REQUEST_TIMEOUT):
                 resp = await self._session.request(
@@ -498,7 +501,7 @@ class BrightSignClient:
         url = f"http://{self.host}:{LWS_PORT}{path}"
         try:
             async with asyncio.timeout(REQUEST_TIMEOUT):
-                async with self._session.get(url) as resp:
+                async with self._session.get(url, headers={"Connection": "close"}) as resp:
                     if resp.status != 200:
                         return None
                     body = await self._read_limited(resp)
@@ -569,6 +572,7 @@ class BrightSignClient:
                 result.auth_failed = True
                 legacy = {}
             except BrightSignConnectionError:
+                result.legacy = None  # unknown: the coordinator detects it later
                 legacy = {}
             if legacy:
                 result.legacy = True

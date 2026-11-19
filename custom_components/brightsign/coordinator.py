@@ -22,7 +22,7 @@ from .api import (
     LwsData,
     info_value,
 )
-from .const import CONF_HAS_LEGACY, DOMAIN, SCAN_INTERVAL
+from .const import CONF_HAS_LEGACY, CONF_SERIAL, DOMAIN, SCAN_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -132,6 +132,7 @@ class BrightSignCoordinator(DataUpdateCoordinator[BrightSignData]):
         except (BrightSignAuthError, BrightSignNotSupported):
             found = False
         self.has_legacy = found
+        _LOGGER.debug("Info page fallback on %s: %s", self.client.host, found)
         entry = self.config_entry
         self.hass.config_entries.async_update_entry(
             entry, data={**entry.data, CONF_HAS_LEGACY: found}
@@ -143,7 +144,11 @@ class BrightSignCoordinator(DataUpdateCoordinator[BrightSignData]):
         entry = self.config_entry
         if not name or entry.title == name:
             return
-        if entry.title not in (f"BrightSign {entry.data[CONF_HOST]}", "BrightSign player"):
+        serial = entry.data.get(CONF_SERIAL) or data.legacy.get("serial") or ""
+        generated = entry.title in (f"BrightSign {entry.data[CONF_HOST]}", "BrightSign player") or (
+            bool(serial) and entry.title.startswith("BrightSign ") and entry.title.endswith(serial)
+        )
+        if not generated:
             return  # the user (or an earlier poll) already chose a name
         self.hass.config_entries.async_update_entry(entry, title=name)
         registry = dr.async_get(self.hass)

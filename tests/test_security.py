@@ -177,5 +177,10 @@ def test_parse_legacy_info_rejects_other_pages() -> None:
     assert parse_legacy_info("<html>BrightSign</html>") == {}
     assert parse_legacy_info("BrightSign " + "x" * 1_100_000) == {}
     assert parse_uptime("unknown") is None
+    empty_name = parse_legacy_info(
+        "<p>BrightSign</p><p>Name:</p><p>Model:</p><p>XD1032</p><p>Unique ID:</p><p>X1</p>"
+    )
+    assert "name" not in empty_name
+    assert empty_name["model"] == "XD1032"
     one_line = parse_legacy_info("<p>BrightSign</p><p>Unique ID: X1</p><p>Firmware Version: 8</p>")
     assert one_line == {"serial": "X1", "firmware": "8"}

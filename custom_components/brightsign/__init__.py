@@ -97,6 +97,18 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
+async def async_migrate_entry(hass: HomeAssistant, entry: BrightSignConfigEntry) -> bool:
+    """1.1 -> 1.2: detect the Info page fallback again (0.3.0 could miss it)."""
+    if entry.version > 1:
+        return False
+    if entry.minor_version < 2:
+        data = dict(entry.data)
+        if data.get(CONF_HAS_LEGACY) is False and data.get(CONF_REST_SCHEME) is None:
+            data.pop(CONF_HAS_LEGACY)
+        hass.config_entries.async_update_entry(entry, data=data, minor_version=2)
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: BrightSignConfigEntry) -> bool:
     """Set up a BrightSign player."""
     client = BrightSignClient(

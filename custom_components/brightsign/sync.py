@@ -47,10 +47,14 @@ class _SyncProtocol(asyncio.DatagramProtocol):
 
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
+        self._sources: set[str] = set()
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         if len(data) > MAX_SYNC_DATAGRAM or not is_local_address(addr[0]):
             return
+        if addr[0] not in self._sources and len(self._sources) < 256:
+            self._sources.add(addr[0])
+            _LOGGER.debug("Receiving BrightSign sync traffic from %s", addr[0])
         async_dispatcher_send(self._hass, SIGNAL_SYNC.format(addr[0]), decode_sync_message(data))
 
 
@@ -84,6 +88,7 @@ class SyncListener:
         self._transport, _ = await self._hass.loop.create_datagram_endpoint(
             lambda: _SyncProtocol(self._hass), sock=sock
         )
+        _LOGGER.debug("Listening for BrightSign sync traffic on %s:%s", SYNC_GROUP, SYNC_PORT)
 
     @callback
     def async_stop(self) -> None:

@@ -48,6 +48,7 @@ class BrightSignConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for BrightSign."""
 
     VERSION = 1
+    MINOR_VERSION = 2
 
     def __init__(self) -> None:
         self._host: str | None = None
